@@ -90,9 +90,17 @@ public final class ScanPipeline: Sendable {
                 if isbn.count == 13 { book.isbn13 = isbn } else { book.isbn10 = isbn }
                 touchedFields.append("isbn")
             }
-            if book.tags.isEmpty, !meta.subjects.isEmpty {
-                book.tags = meta.subjects
-                touchedFields.append("tags")
+            // Tags: sanitize incoming keywords, and also repair previously
+            // stored prose-tags (unless the user set them manually).
+            let incomingTags = TagSanitizer.sanitize(meta.subjects)
+            let tagsAreManual = (try? provenanceSource(db, bookId: bookId, field: "tags")) == .manual
+            if !tagsAreManual {
+                if !incomingTags.isEmpty, book.tags.isEmpty || !TagSanitizer.isValid(book.tags) {
+                    book.tags = incomingTags
+                    touchedFields.append("tags")
+                } else if !TagSanitizer.isValid(book.tags) {
+                    book.tags = TagSanitizer.sanitize(book.tags)
+                }
             }
             // Cover quality ranking: a real embedded cover (epub/mobi/azw3)
             // replaces a PDF first-page render, never the other way round.
@@ -169,6 +177,16 @@ public final class ScanPipeline: Sendable {
             onProgress?(processed, parseable.count)
         }
         return parseable.count
+    }
+
+    private static func provenanceSource(
+        _ db: Database, bookId: Int64, field: String
+    ) throws -> ProvenanceSource? {
+        try ProvenanceRecord
+            .filter(ProvenanceRecord.Columns.bookId == bookId)
+            .filter(ProvenanceRecord.Columns.field == field)
+            .fetchOne(db)?
+            .source
     }
 
     /// True when the book's title still looks like it came from a filename

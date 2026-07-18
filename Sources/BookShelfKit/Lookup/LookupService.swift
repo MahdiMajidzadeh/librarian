@@ -212,8 +212,9 @@ public final class LookupService: Sendable {
                 book.bookDescription = description
                 written.append("description")
             }
-            if !candidate.categories.isEmpty, canWrite("tags", isEmpty: book.tags.isEmpty) {
-                book.tags = candidate.categories
+            if case let cleaned = TagSanitizer.sanitize(candidate.categories), !cleaned.isEmpty,
+               canWrite("tags", isEmpty: book.tags.isEmpty) {
+                book.tags = cleaned
                 written.append("tags")
             }
             if let coverData, canWrite("cover", isEmpty: book.coverCachePath == nil),

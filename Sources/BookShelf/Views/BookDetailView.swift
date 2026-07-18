@@ -152,10 +152,12 @@ struct BookDetailView: View {
     }
 
     private var tagRow: some View {
-        HStack(spacing: 6) {
+        FlowLayout(spacing: 6) {
             ForEach(item.book.tags, id: \.self) { tag in
                 Text(tag)
                     .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(.quaternary, in: Capsule())
@@ -171,6 +173,52 @@ struct BookDetailView: View {
                 FileRow(file: file, canSplit: item.files.count > 1)
             }
         }
+    }
+}
+
+/// Left-to-right wrapping layout for chip rows — a paragraph-length tag can
+/// never stretch a chip vertically the way an HStack + multiline Text could.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(maxWidth: proposal.width ?? .infinity, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(maxWidth: bounds.width, subviews: subviews)
+        for (index, slot) in arrangement.slots.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + slot.origin.x, y: bounds.minY + slot.origin.y),
+                proposal: ProposedViewSize(width: slot.width, height: slot.height))
+        }
+    }
+
+    private func arrange(
+        maxWidth: CGFloat, subviews: Subviews
+    ) -> (slots: [(origin: CGPoint, width: CGFloat, height: CGFloat)], size: CGSize) {
+        var slots: [(origin: CGPoint, width: CGFloat, height: CGFloat)] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var usedWidth: CGFloat = 0
+
+        for subview in subviews {
+            let ideal = subview.sizeThatFits(.unspecified)
+            // A single chip wider than the container truncates instead of
+            // overflowing the row.
+            let width = min(ideal.width, maxWidth)
+            if x > 0, x + width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            slots.append((CGPoint(x: x, y: y), width, ideal.height))
+            x += width + spacing
+            rowHeight = max(rowHeight, ideal.height)
+            usedWidth = max(usedWidth, x - spacing)
+        }
+        return (slots, CGSize(width: usedWidth, height: y + rowHeight))
     }
 }
 

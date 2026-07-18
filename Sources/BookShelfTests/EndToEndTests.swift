@@ -76,6 +76,65 @@ func endToEndTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("tag sanitizer: prose keywords are dropped, keywords kept") {
+        let prose = [
+            "Our 2021 State of Product Management Report is a collection of data",
+            "product strategy",
+            "career goals",
+            "  roadmaps  ",
+            "Product Strategy",   // dupe, different case
+            "",
+        ]
+        let cleaned = TagSanitizer.sanitize(prose)
+        expectEqual(cleaned, ["product strategy", "career goals", "roadmaps"])
+        expect(!TagSanitizer.isValid(prose), "prose list must be flagged invalid")
+        expect(TagSanitizer.isValid(cleaned))
+        expectEqual(TagSanitizer.sanitize(Array(repeating: "x", count: 1).flatMap { _ in
+            (0..<30).map { "tag\($0)" }
+        }).count, TagSanitizer.maxTagCount, "count capped")
+    }
+
+    await runner.run("pipeline: prose PDF keywords become sane tags, re-extract repairs old rows") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            try Fixtures.makePDF(
+                at: library.appendingPathComponent("report.pdf"),
+                keywords: "Our 2021 State of Product Management Report is a collection of data designed to bring to life the trends, product strategy, career goals, roadmaps")
+            _ = try await pipeline.scan(root: library)
+
+            var book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.tags ?? [], ["product strategy", "career goals", "roadmaps"],
+                        "prose fragment dropped, real keywords kept")
+
+            // Simulate a pre-fix database row full of prose tags.
+            try await database.writer.write { db in
+                var b = try Book.fetchOne(db)!
+                b.tags = ["a paragraph-length tag that clearly is not a keyword at all, truly", "sf"]
+                try b.update(db)
+            }
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.tags ?? [], ["product strategy", "career goals", "roadmaps"],
+                        "re-extract must replace invalid stored tags")
+
+            // Manual tags are never touched, even when invalid-looking.
+            try await database.writer.write { db in
+                var b = try Book.fetchOne(db)!
+                b.tags = ["my very own extremely long personal tag that i typed on purpose ok"]
+                try b.update(db)
+                try ProvenanceRecord(bookId: b.id!, field: "tags", source: .manual).save(db)
+            }
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.tags.count, 1, "manual tags must survive re-extract")
+        }
+    }
+
     await runner.run("re-extract upgrades covers on an already-scanned library") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")
