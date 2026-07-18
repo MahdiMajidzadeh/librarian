@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import BookShelfKit
 
 /// Mandatory pre-execution preview (FR-4.6): current → new name per file,
@@ -49,6 +50,9 @@ struct RenamePreviewSheet: View {
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Export Plan…") { exportPlan() }
+                    .controlSize(.small)
+                    .help("Save this preview as a CSV to audit before renaming (dry run)")
                 Spacer()
                 Button("Cancel") { model.renamePlan = nil }
                     .keyboardShortcut(.cancelAction)
@@ -62,6 +66,18 @@ struct RenamePreviewSheet: View {
             .padding(12)
         }
         .frame(width: 640)
+    }
+
+    private func exportPlan() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "rename-plan.csv"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try RenamePlanExporter.exportCSV(plan: plan, to: url)
+        } catch {
+            model.errorMessage = "Plan export failed: \(error.localizedDescription)"
+        }
     }
 
     private var summary: String {

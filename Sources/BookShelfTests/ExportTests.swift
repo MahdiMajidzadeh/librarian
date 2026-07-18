@@ -137,6 +137,39 @@ func exportTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("rename dry-run export: statuses, BOM, escaping") {
+        try await withTempDirectory { dir in
+            let plan = [
+                RenamePlanItem(id: 1, bookId: 1, bookTitle: "Dune, Deluxe \"Ed\"",
+                               currentPath: "/b/dune.epub",
+                               proposedName: "Frank Herbert - Dune.epub",
+                               status: .ready, included: true),
+                RenamePlanItem(id: 2, bookId: 2, bookTitle: "Hyperion",
+                               currentPath: "/b/hyperion.mobi",
+                               proposedName: "Dan Simmons - Hyperion (2).mobi",
+                               status: .collisionResolved, included: true),
+                RenamePlanItem(id: 3, bookId: 3, bookTitle: "Unknown",
+                               currentPath: "/b/mystery.pdf",
+                               proposedName: nil,
+                               status: .missingTokens(["author"]), included: false),
+            ]
+            let url = dir.appendingPathComponent("plan.csv")
+            try RenamePlanExporter.exportCSV(plan: plan, to: url)
+
+            let raw = try Data(contentsOf: url)
+            expectEqual(raw.prefix(3), Data([0xEF, 0xBB, 0xBF]))
+            let text = String(data: raw.dropFirst(3), encoding: .utf8)!
+            let lines = text.split(separator: "\r\n")
+            expectEqual(lines.count, 4)
+            expect(lines[0].hasPrefix("book_title,current_name,proposed_name,status"),
+                   "header expected, got \(lines[0])")
+            expect(lines[1].contains("\"Dune, Deluxe \"\"Ed\"\"\""), "escaping")
+            expect(lines[2].contains("collision_suffixed"), "collision status")
+            expect(lines[3].contains("excluded_missing_author") && lines[3].contains(",no,"),
+                   "exclusion reason and included=no")
+        }
+    }
+
     await runner.run("export scope: selection subset only") {
         let database = try AppDatabase.inMemory()
         let ids = try await seedLibrary(database)

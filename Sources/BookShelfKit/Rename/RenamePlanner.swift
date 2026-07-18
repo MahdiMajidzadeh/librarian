@@ -23,6 +23,17 @@ public struct RenamePlanItem: Identifiable, Sendable, Equatable {
     /// User can exclude individual rows in the preview.
     public var included: Bool
 
+    public init(id: Int64, bookId: Int64, bookTitle: String, currentPath: String,
+                proposedName: String?, status: Status, included: Bool) {
+        self.id = id
+        self.bookId = bookId
+        self.bookTitle = bookTitle
+        self.currentPath = currentPath
+        self.proposedName = proposedName
+        self.status = status
+        self.included = included
+    }
+
     public var currentName: String {
         URL(fileURLWithPath: currentPath).lastPathComponent
     }
