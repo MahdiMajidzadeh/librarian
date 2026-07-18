@@ -118,6 +118,11 @@ final class CoverImageLoader {
         cache.setObject(image, forKey: path as NSString)
         return image
     }
+
+    /// Drops a stale entry after the cover file is rewritten in place.
+    func invalidate(path: String) {
+        cache.removeObject(forKey: path as NSString)
+    }
 }
 
 @MainActor

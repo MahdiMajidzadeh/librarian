@@ -30,6 +30,9 @@ struct ContentView: View {
                 statusBar
             }
         }
+        .sheet(item: $model.pendingPicker) { request in
+            CandidatePickerSheet(request: request)
+        }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK") { model.errorMessage = nil }
         } message: {
@@ -51,7 +54,28 @@ struct ContentView: View {
             Text(statusSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let summary = model.lastResolveSummary {
+                Text("· \(summary)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
+            if let progress = model.resolveProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                        .frame(width: 120)
+                    Text("Resolving \(progress.done)/\(progress.total)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !model.selection.isEmpty && !model.isResolving {
+                Button("Resolve \(model.selection.count) Online") {
+                    Task { await model.resolveMetadata(ids: Array(model.selection)) }
+                }
+                .controlSize(.small)
+            }
             if model.selection.count >= 2 {
                 Button("Merge \(model.selection.count) Books") {
                     Task { await model.mergeSelection() }
@@ -136,6 +160,14 @@ struct ContentView: View {
             }
             .disabled(model.libraryFolder == nil || model.isScanning)
             .help("Rescan the library folder")
+
+            Button {
+                Task { await model.resolveMetadata(ids: model.unresolvedBookIds) }
+            } label: {
+                Label("Resolve Missing", systemImage: "globe")
+            }
+            .disabled(model.unresolvedBookIds.isEmpty || model.isResolving)
+            .help("Fetch metadata and covers online for all incomplete books")
 
             filterMenu
             sortMenu

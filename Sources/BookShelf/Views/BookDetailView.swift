@@ -8,10 +8,14 @@ struct BookDetailView: View {
     @Environment(AppModel.self) private var model
     let item: BookListItem
 
+    @State private var provenance: [String: ProvenanceSource] = [:]
+    @State private var showEditSheet = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                actionRow
                 Divider()
                 metadataGrid
                 if let description = item.book.bookDescription {
@@ -29,6 +33,34 @@ struct BookDetailView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .task(id: item.id) {
+            provenance = model.provenance(for: item.id)
+        }
+        .task(id: item.book.updatedAt) {
+            provenance = model.provenance(for: item.id)
+        }
+        .sheet(isPresented: $showEditSheet) {
+            BookEditSheet(item: item)
+        }
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                Task { await model.resolveMetadata(ids: [item.id]) }
+            } label: {
+                Label("Resolve Online", systemImage: "globe")
+            }
+            .disabled(model.isResolving)
+            .help("Look up metadata and cover on Open Library / Google Books")
+
+            Button {
+                showEditSheet = true
+            } label: {
+                Label("Edit…", systemImage: "pencil")
+            }
+        }
+        .controlSize(.small)
     }
 
     private var header: some View {
@@ -90,24 +122,31 @@ struct BookDetailView: View {
 
     private var metadataGrid: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-            metadataRow("Publisher", item.book.publisher)
-            metadataRow("Year", item.book.year.map(String.init))
-            metadataRow("Language", item.book.language)
-            metadataRow("ISBN-13", item.book.isbn13)
-            metadataRow("ISBN-10", item.book.isbn10)
+            metadataRow("Title", item.book.title, field: "title")
+            metadataRow("Authors", item.book.authors.joined(separator: ", "), field: "authors")
+            metadataRow("Publisher", item.book.publisher, field: "publisher")
+            metadataRow("Year", item.book.year.map(String.init), field: "year")
+            metadataRow("Language", item.book.language, field: "language")
+            metadataRow("ISBN-13", item.book.isbn13, field: "isbn")
+            metadataRow("ISBN-10", item.book.isbn10, field: "isbn")
         }
         .font(.callout)
     }
 
     @ViewBuilder
-    private func metadataRow(_ label: String, _ value: String?) -> some View {
+    private func metadataRow(_ label: String, _ value: String?, field: String) -> some View {
         if let value, !value.isEmpty {
             GridRow {
                 Text(label)
                     .foregroundStyle(.secondary)
                     .gridColumnAlignment(.trailing)
-                Text(value)
-                    .textSelection(.enabled)
+                HStack(spacing: 6) {
+                    Text(value)
+                        .textSelection(.enabled)
+                    if let source = provenance[field] {
+                        ProvenanceTag(source: source)
+                    }
+                }
             }
         }
     }
@@ -131,6 +170,41 @@ struct BookDetailView: View {
             ForEach(item.files, id: \.path) { file in
                 FileRow(file: file, canSplit: item.files.count > 1)
             }
+        }
+    }
+}
+
+/// Field-level provenance chip (FR-3.3): where a value came from.
+@MainActor
+struct ProvenanceTag: View {
+    let source: ProvenanceSource
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+            .help("Source: \(label)")
+    }
+
+    private var label: String {
+        switch source {
+        case .embedded: return "embedded"
+        case .openLibrary: return "open library"
+        case .googleBooks: return "google books"
+        case .manual: return "manual"
+        case .filename: return "filename"
+        }
+    }
+
+    private var color: Color {
+        switch source {
+        case .manual: return .purple
+        case .embedded: return .blue
+        case .openLibrary, .googleBooks: return .teal
+        case .filename: return .gray
         }
     }
 }

@@ -70,6 +70,18 @@ final class AppModel {
     var sortKey: SortKey = .title
     var sortAscending = true
 
+    // Online resolution (FR-3)
+    private(set) var resolveProgress: (done: Int, total: Int)?
+    var pendingPicker: PickerRequest?
+    private var pickerQueue: [PickerRequest] = []
+    private(set) var lastResolveSummary: String?
+
+    struct PickerRequest: Identifiable {
+        let id: Int64          // book id
+        let bookTitle: String
+        let candidates: [LookupCandidate]
+    }
+
     private var observationTask: Task<Void, Never>?
 
     init(database: AppDatabase? = nil) throws {
@@ -274,6 +286,214 @@ final class AppModel {
         case .complete: return 2
         case .partial: return 1
         case .unresolved: return 0
+        }
+    }
+
+    // MARK: - Online resolution (FR-3)
+
+    var applyPolicy: ApplyPolicy {
+        let raw = (try? database.setting("applyPolicy")) ?? nil
+        return raw.flatMap(ApplyPolicy.init(rawValue:)) ?? .fillEmpty
+    }
+
+    private func makeLookupService() -> LookupService {
+        let googleKey = (try? database.setting("googleBooksAPIKey")) ?? nil
+        return LookupService(
+            database: database,
+            coverCache: coverCache,
+            providers: LookupService.standardProviders(googleAPIKey: googleKey))
+    }
+
+    var isResolving: Bool { resolveProgress != nil }
+
+    /// Books worth resolving in a "resolve all missing" pass.
+    var unresolvedBookIds: [Int64] {
+        items.filter { $0.book.metadataStatus != .complete }.map(\.id)
+    }
+
+    func resolveMetadata(ids: [Int64]) async {
+        guard !ids.isEmpty, !isResolving else { return }
+        let service = makeLookupService()
+        resolveProgress = (0, ids.count)
+        let outcome = await service.resolveBatch(bookIds: ids, policy: applyPolicy) { done, total in
+            Task { @MainActor [weak self] in
+                self?.resolveProgress = (done, total)
+            }
+        }
+        resolveProgress = nil
+
+        // Queue ambiguous books for the candidate picker (FR-3.4).
+        for (bookId, candidates) in outcome.ambiguous.sorted(by: { $0.key < $1.key }) {
+            let title = items.first { $0.id == bookId }?.book.title ?? "Book \(bookId)"
+            pickerQueue.append(PickerRequest(id: bookId, bookTitle: title, candidates: candidates))
+        }
+        advancePicker()
+
+        var parts: [String] = []
+        if !outcome.resolved.isEmpty { parts.append("\(outcome.resolved.count) resolved") }
+        if !outcome.ambiguous.isEmpty { parts.append("\(outcome.ambiguous.count) need review") }
+        if !outcome.noMatch.isEmpty { parts.append("\(outcome.noMatch.count) no match") }
+        if !outcome.failed.isEmpty { parts.append("\(outcome.failed.count) failed") }
+        lastResolveSummary = parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    func advancePicker() {
+        pendingPicker = pickerQueue.isEmpty ? nil : pickerQueue.removeFirst()
+    }
+
+    func applyCandidate(_ candidate: LookupCandidate, to bookId: Int64) async {
+        do {
+            try await makeLookupService().apply(candidate, to: bookId, policy: applyPolicy)
+        } catch {
+            errorMessage = "Applying metadata failed: \(error.localizedDescription)"
+        }
+        advancePicker()
+    }
+
+    // MARK: - Provenance & manual edits (FR-3.3, FR-3.7)
+
+    func provenance(for bookId: Int64) -> [String: ProvenanceSource] {
+        (try? database.provenance(forBook: bookId)) ?? [:]
+    }
+
+    struct ManualEdits: Sendable {
+        var title: String
+        var authors: String        // comma-separated in the form
+        var series: String
+        var seriesIndex: String
+        var publisher: String
+        var year: String
+        var language: String
+        var isbn: String
+        var tags: String           // comma-separated
+        var description: String
+
+        init(book: Book) {
+            title = book.title
+            authors = book.authors.joined(separator: ", ")
+            series = book.series ?? ""
+            seriesIndex = book.seriesIndex.map {
+                $0.truncatingRemainder(dividingBy: 1) == 0 ? String(Int($0)) : String($0)
+            } ?? ""
+            publisher = book.publisher ?? ""
+            year = book.year.map(String.init) ?? ""
+            language = book.language ?? ""
+            isbn = book.isbn13 ?? book.isbn10 ?? ""
+            tags = book.tags.joined(separator: ", ")
+            description = book.bookDescription ?? ""
+        }
+    }
+
+    /// Saves user edits; every changed field gets `.manual` provenance so no
+    /// later automatic pass can overwrite it (FR-3.2).
+    func saveManualEdits(_ edits: ManualEdits, bookId: Int64) async {
+        do {
+            try await database.writer.write { db in
+                guard var book = try Book.fetchOne(db, key: bookId) else { return }
+                var changed: [String] = []
+
+                func splitList(_ raw: String) -> [String] {
+                    raw.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                }
+
+                let title = edits.title.trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty, title != book.title {
+                    book.title = title
+                    book.titleSort = Book.sortKey(forTitle: title)
+                    changed.append("title")
+                }
+                let authors = splitList(edits.authors)
+                if authors != book.authors {
+                    book.authors = authors
+                    book.authorSort = Book.sortKey(forAuthors: authors)
+                    changed.append("authors")
+                }
+                let series = edits.series.trimmingCharacters(in: .whitespaces)
+                if (series.isEmpty ? nil : series) != book.series {
+                    book.series = series.isEmpty ? nil : series
+                    changed.append("series")
+                }
+                let seriesIndex = Double(edits.seriesIndex.trimmingCharacters(in: .whitespaces))
+                if seriesIndex != book.seriesIndex {
+                    book.seriesIndex = seriesIndex
+                    if !changed.contains("series") { changed.append("series") }
+                }
+                let publisher = edits.publisher.trimmingCharacters(in: .whitespaces)
+                if (publisher.isEmpty ? nil : publisher) != book.publisher {
+                    book.publisher = publisher.isEmpty ? nil : publisher
+                    changed.append("publisher")
+                }
+                let year = Int(edits.year.trimmingCharacters(in: .whitespaces))
+                if year != book.year {
+                    book.year = year
+                    changed.append("year")
+                }
+                let language = edits.language.trimmingCharacters(in: .whitespaces)
+                if (language.isEmpty ? nil : language) != book.language {
+                    book.language = language.isEmpty ? nil : language
+                    changed.append("language")
+                }
+                let isbnRaw = edits.isbn.trimmingCharacters(in: .whitespaces)
+                let isbn = isbnRaw.isEmpty ? nil : (Normalizer.extractISBN(isbnRaw) ?? isbnRaw)
+                if isbn != (book.isbn13 ?? book.isbn10) {
+                    if let isbn, isbn.count == 10 {
+                        book.isbn10 = isbn
+                        book.isbn13 = nil
+                    } else {
+                        book.isbn13 = isbn
+                        book.isbn10 = nil
+                    }
+                    changed.append("isbn")
+                }
+                let tags = splitList(edits.tags)
+                if tags != book.tags {
+                    book.tags = tags
+                    changed.append("tags")
+                }
+                let description = edits.description.trimmingCharacters(in: .whitespacesAndNewlines)
+                if (description.isEmpty ? nil : description) != book.bookDescription {
+                    book.bookDescription = description.isEmpty ? nil : description
+                    changed.append("description")
+                }
+
+                guard !changed.isEmpty else { return }
+                book.metadataStatus = ScanPipeline.status(for: book)
+                book.updatedAt = Date()
+                try book.update(db)
+                for field in changed {
+                    try ProvenanceRecord(bookId: bookId, field: field, source: .manual).save(db)
+                }
+            }
+        } catch {
+            errorMessage = "Saving edits failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Replaces the cover from a user-chosen image file (.manual provenance).
+    func replaceCover(bookId: Int64) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+        Task {
+            do {
+                let coverCache = self.coverCache
+                let gridURL = try coverCache.store(imageData: data, bookId: bookId)
+                try await database.writer.write { db in
+                    guard var book = try Book.fetchOne(db, key: bookId) else { return }
+                    book.coverCachePath = gridURL.path
+                    book.metadataStatus = ScanPipeline.status(for: book)
+                    book.updatedAt = Date()
+                    try book.update(db)
+                    try ProvenanceRecord(bookId: bookId, field: "cover", source: .manual).save(db)
+                }
+                CoverImageLoader.shared.invalidate(path: gridURL.path)
+            } catch {
+                errorMessage = "Replacing cover failed: \(error.localizedDescription)"
+            }
         }
     }
 
