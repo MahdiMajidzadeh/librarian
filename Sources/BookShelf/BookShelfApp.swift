@@ -39,17 +39,18 @@ struct BookShelfApp: App {
                     Task { await model.scan() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(model.libraryFolder == nil || model.isScanning)
 
+                // No .disabled conditions here beyond the essentials: Commands
+                // closures have proven unreliable at re-evaluating @Observable
+                // state, leaving items permanently greyed. The model functions
+                // guard internally instead.
                 Button("Re-extract Embedded Metadata") {
                     Task { await model.reextractMetadata() }
                 }
-                .disabled(model.items.isEmpty || model.isScanning)
 
                 Button("Rebuild Auto-Groups") {
                     Task { await model.rebuildGroups() }
                 }
-                .disabled(model.items.isEmpty || model.isScanning)
                 .help("Re-runs grouping with the current rules. Manual merges and splits are preserved.")
 
                 Divider()
@@ -69,7 +70,6 @@ struct BookShelfApp: App {
                         Task { await model.export(.csv(mode: .perFile)) }
                     }
                 }
-                .disabled(model.items.isEmpty)
 
                 Divider()
 

@@ -151,6 +151,7 @@ final class AppModel {
     }
 
     func scan() async {
+        Self.logAction("scan folder=\(libraryFolder?.lastPathComponent ?? "nil") isScanning=\(isScanning)")
         guard let root = libraryFolder, !isScanning else { return }
         scanProgress = ScanProgress(phase: .enumerating, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
@@ -197,6 +198,7 @@ final class AppModel {
     /// upgrade per source ranking). Useful after parser improvements — normal
     /// rescans skip unchanged files.
     func reextractMetadata() async {
+        Self.logAction("reextractMetadata isScanning=\(isScanning)")
         guard !isScanning else { return }
         scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
@@ -216,6 +218,7 @@ final class AppModel {
     /// Re-partitions automatic groups with the current rules (manual
     /// merges/splits untouched; unchanged groups keep their book rows).
     func rebuildGroups() async {
+        Self.logAction("rebuildGroups isScanning=\(isScanning)")
         guard !isScanning else { return }
         scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
@@ -324,9 +327,29 @@ final class AppModel {
         return items.first { $0.id == id }
     }
 
+    // MARK: - Action log
+
+    /// Appends one line per user action to Application Support/BookShelf/
+    /// actions.log — the first thing to read when someone reports a control
+    /// "doing nothing".
+    nonisolated static func logAction(_ name: String) {
+        guard let dir = try? AppDatabase.defaultURL().deletingLastPathComponent() else { return }
+        let url = dir.appendingPathComponent("actions.log")
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(name)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
     // MARK: - Merge / split (FR-2.4)
 
     func mergeSelection() async {
+        Self.logAction("mergeSelection count=\(selection.count)")
         let ids = Array(selection)
         guard ids.count >= 2 else { return }
         // Target: the entry with the most complete metadata.
@@ -347,6 +370,7 @@ final class AppModel {
 
     /// Dissolves a whole group: every file becomes its own book.
     func ungroup(bookId: Int64) async {
+        Self.logAction("ungroup book=\(bookId)")
         do {
             _ = try await database.writer.write { db in
                 try GroupingOperations.ungroup(db, bookId: bookId)
@@ -358,6 +382,7 @@ final class AppModel {
     }
 
     func split(fileId: Int64) async {
+        Self.logAction("split file=\(fileId)")
         do {
             let newBookId = try await database.writer.write { db in
                 try GroupingOperations.split(db, fileId: fileId)
