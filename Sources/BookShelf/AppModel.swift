@@ -93,11 +93,13 @@ final class AppModel {
         self.database = try database ?? AppDatabase.open(at: AppDatabase.defaultURL())
         self.coverCache = try CoverCache.default()
         self.libraryFolder = try? FolderAccess.restore(from: self.database)
+        self.watchFolderEnabled = (try? self.database.setting("watchFolder")) == "1"
         if let raw = try? self.database.setting("viewMode"), let mode = ViewMode(rawValue: raw) {
             self.viewMode = mode
         }
         startObservation()
         Task { await refreshUndoState() }
+        restartFolderWatcher()
     }
 
     // MARK: - Live query
@@ -136,6 +138,7 @@ final class AppModel {
         do {
             try FolderAccess.persist(url: url, in: database)
             libraryFolder = url
+            restartFolderWatcher()
             Task { await self.scan() }
         } catch {
             errorMessage = "Could not save folder access: \(error.localizedDescription)"
@@ -162,6 +165,32 @@ final class AppModel {
             errorMessage = "Scan failed: \(error.localizedDescription)"
         }
         scanProgress = nil
+    }
+
+    // MARK: - Folder watching (FR-1.6, P1)
+
+    private(set) var watchFolderEnabled = false
+    private var folderWatcher: FolderWatcher?
+
+    func setWatchFolder(_ enabled: Bool) {
+        watchFolderEnabled = enabled
+        try? database.setSetting("watchFolder", enabled ? "1" : "0")
+        restartFolderWatcher()
+    }
+
+    /// Called at launch (after init) and whenever the folder or toggle changes.
+    func restartFolderWatcher() {
+        folderWatcher?.stop()
+        folderWatcher = nil
+        guard watchFolderEnabled, let root = libraryFolder else { return }
+        let watcher = FolderWatcher { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isScanning else { return }
+                await self.scan()
+            }
+        }
+        watcher.start(watching: root)
+        folderWatcher = watcher
     }
 
     /// Re-reads embedded metadata from every present file (fill-empty; covers

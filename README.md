@@ -97,5 +97,3 @@ provider; Open Library needs no key and is always available.
   path is in place for a future signed build).
 - Metadata is stored in the app database only — never written back into the
   book files (P2 in the spec).
-- Folder watching (FSEvents), per-file CSV mode, and rename dry-run export
-  are P1 backlog items.

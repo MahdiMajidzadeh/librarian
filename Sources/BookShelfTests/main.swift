@@ -35,6 +35,7 @@ await mobiParserTests(runner)
 await lookupTests(runner)
 await renameTests(runner)
 await exportTests(runner)
+await folderWatcherTests(runner)
 await endToEndTests(runner)
 
 runner.finish()

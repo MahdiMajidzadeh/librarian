@@ -107,7 +107,9 @@ Sources/BookShelfTests/ TestHarness.swift + one *Tests.swift per subsystem
 
 ## Backlog markers
 
-P1: FSEvents folder watching, per-file CSV mode, rename dry-run export.
+P1 (all shipped): FSEvents folder watching (`FolderWatcher`, Settings toggle),
+per-file CSV mode (`CSVExporter.Mode.perFile`), rename dry-run export
+(`RenamePlanExporter`).
 P2: metadata write-back into files, format conversion, content-hash dedupe.
 Sandbox/codesigning: bookmark code paths exist but the shipped bundle is
 unsigned — revisit when Xcode is available.

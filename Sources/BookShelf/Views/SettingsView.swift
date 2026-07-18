@@ -165,7 +165,19 @@ struct SettingsView: View {
             Text("Comma-separated. These file types are skipped on the next scan.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Watch folder for changes", isOn: watchBinding)
+            Text("Automatically rescans a couple of seconds after files are added, removed, or renamed in the library folder.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var watchBinding: Binding<Bool> {
+        let model = self.model
+        return Binding(
+            get: { model.watchFolderEnabled },
+            set: { model.setWatchFolder($0) }
+        )
     }
 
     private var exportSection: some View {
