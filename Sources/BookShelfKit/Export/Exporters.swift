@@ -156,13 +156,23 @@ public enum JSONExporter {
 // MARK: - CSV (FR-5.3)
 
 public enum CSVExporter {
+    /// One row per book (default), or one row per file (P1 alternate mode:
+    /// book columns repeat for each of its files).
+    public enum Mode: Sendable {
+        case perBook
+        case perFile
+    }
+
     public struct Options: Sendable {
         public var delimiter: String
         public var multiValueSeparator: String
+        public var mode: Mode
 
-        public init(delimiter: String = ",", multiValueSeparator: String = "; ") {
+        public init(delimiter: String = ",", multiValueSeparator: String = "; ",
+                    mode: Mode = .perBook) {
             self.delimiter = delimiter
             self.multiValueSeparator = multiValueSeparator
+            self.mode = mode
         }
     }
 
@@ -172,48 +182,84 @@ public enum CSVExporter {
         "total_size_bytes", "metadata_status", "files",
     ]
 
-    /// One row per book; multi-value fields joined; UTF-8 **with BOM** so
-    /// Excel renders Persian/Unicode correctly (NFR-4).
+    static let perFileHeader = [
+        "title", "authors", "series", "series_index", "publisher", "year",
+        "language", "isbn13", "isbn10", "tags", "metadata_status",
+        "file_path", "file_name", "format", "size_bytes", "modified_at", "missing",
+    ]
+
+    /// Multi-value fields joined; UTF-8 **with BOM** so Excel renders
+    /// Persian/Unicode correctly (NFR-4).
     public static func export(
         records: [ExportRecord],
         to url: URL,
         options: Options = Options(),
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) throws {
-        var out = header.map { escape($0, options) }.joined(separator: options.delimiter) + "\r\n"
+        let activeHeader = options.mode == .perBook ? header : perFileHeader
+        var out = activeHeader.map { escape($0, options) }.joined(separator: options.delimiter) + "\r\n"
 
         for (index, record) in records.enumerated() {
-            let book = record.book
-            let formats = record.files
-                .map(\.format.rawValue)
-                .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-                .joined(separator: ";")
-            let fields: [String] = [
-                book.title,
-                book.authors.joined(separator: options.multiValueSeparator),
-                book.series ?? "",
-                book.seriesIndex.map {
-                    $0.truncatingRemainder(dividingBy: 1) == 0 ? String(Int($0)) : String($0)
-                } ?? "",
-                book.publisher ?? "",
-                book.year.map(String.init) ?? "",
-                book.language ?? "",
-                book.isbn13 ?? "",
-                book.isbn10 ?? "",
-                book.tags.joined(separator: options.multiValueSeparator),
-                formats,
-                String(record.files.count),
-                String(record.files.reduce(0) { $0 + $1.sizeBytes }),
-                book.metadataStatus.rawValue,
-                record.files.map(\.path).joined(separator: options.multiValueSeparator),
-            ]
-            out += fields.map { escape($0, options) }.joined(separator: options.delimiter) + "\r\n"
+            switch options.mode {
+            case .perBook:
+                out += row(perBook: record, options).map { escape($0, options) }
+                    .joined(separator: options.delimiter) + "\r\n"
+            case .perFile:
+                for file in record.files {
+                    out += row(book: record.book, file: file, options).map { escape($0, options) }
+                        .joined(separator: options.delimiter) + "\r\n"
+                }
+            }
             onProgress?(index + 1, records.count)
         }
 
         var data = Data([0xEF, 0xBB, 0xBF]) // UTF-8 BOM
         data.append(Data(out.utf8))
         try data.write(to: url, options: .atomic)
+    }
+
+    private static func bookColumns(_ book: Book, _ options: Options) -> [String] {
+        [
+            book.title,
+            book.authors.joined(separator: options.multiValueSeparator),
+            book.series ?? "",
+            book.seriesIndex.map {
+                $0.truncatingRemainder(dividingBy: 1) == 0 ? String(Int($0)) : String($0)
+            } ?? "",
+            book.publisher ?? "",
+            book.year.map(String.init) ?? "",
+            book.language ?? "",
+            book.isbn13 ?? "",
+            book.isbn10 ?? "",
+            book.tags.joined(separator: options.multiValueSeparator),
+        ]
+    }
+
+    private static func row(perBook record: ExportRecord, _ options: Options) -> [String] {
+        let formats = record.files
+            .map(\.format.rawValue)
+            .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            .joined(separator: ";")
+        return bookColumns(record.book, options) + [
+            formats,
+            String(record.files.count),
+            String(record.files.reduce(0) { $0 + $1.sizeBytes }),
+            record.book.metadataStatus.rawValue,
+            record.files.map(\.path).joined(separator: options.multiValueSeparator),
+        ]
+    }
+
+    private static func row(book: Book, file: BookFile, _ options: Options) -> [String] {
+        let iso = ISO8601DateFormatter()
+        return bookColumns(book, options) + [
+            book.metadataStatus.rawValue,
+            file.path,
+            URL(fileURLWithPath: file.path).lastPathComponent,
+            file.format.rawValue,
+            String(file.sizeBytes),
+            iso.string(from: file.modifiedAt),
+            file.missingFlag ? "yes" : "no",
+        ]
     }
 
     static func escape(_ field: String, _ options: Options) -> String {

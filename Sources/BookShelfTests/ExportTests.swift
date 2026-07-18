@@ -137,6 +137,31 @@ func exportTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("csv per-file mode: one row per file with repeated book columns") {
+        try await withTempDirectory { dir in
+            let database = try AppDatabase.inMemory()
+            _ = try await seedLibrary(database)   // Dune (2 files) + Persian (1 file)
+            let url = dir.appendingPathComponent("per-file.csv")
+            let records = try await ExportRecord.fetch(from: database)
+            try CSVExporter.export(records: records, to: url,
+                                   options: .init(mode: .perFile))
+
+            let text = String(data: try Data(contentsOf: url).dropFirst(3), encoding: .utf8)!
+            let lines = text.split(separator: "\r\n")
+            expectEqual(lines.count, 4, "header + 3 file rows, got \(lines.count)")
+            expect(lines[0].hasPrefix("title,authors,") && lines[0].contains("file_path"),
+                   "per-file header, got \(lines[0])")
+            let duneRows = lines.dropFirst().filter { $0.hasPrefix("Dune,") }
+            expectEqual(duneRows.count, 2, "Dune has two files → two rows")
+            expect(duneRows.contains { $0.contains("/books/dune.epub") && $0.contains(",epub,") },
+                   "epub row with path and format")
+            expect(duneRows.contains { $0.contains("/books/dune.pdf") && $0.contains(",pdf,") },
+                   "pdf row with path and format")
+            expect(lines.dropFirst().allSatisfy { $0.hasSuffix(",no") },
+                   "missing column present on every row")
+        }
+    }
+
     await runner.run("rename dry-run export: statuses, BOM, escaping") {
         try await withTempDirectory { dir in
             let plan = [

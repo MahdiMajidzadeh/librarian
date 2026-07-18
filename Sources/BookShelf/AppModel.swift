@@ -598,7 +598,7 @@ final class AppModel {
 
     enum ExportKind {
         case json(includeCovers: Bool)
-        case csv
+        case csv(mode: CSVExporter.Mode = .perBook)
     }
 
     /// Export scope (FR-5.1): the selection when present, otherwise the
@@ -640,10 +640,10 @@ final class AppModel {
                         records: records, to: url,
                         includeCovers: includeCovers, coverCache: coverCache,
                         onProgress: progress)
-                case .csv:
+                case .csv(let mode):
                     try CSVExporter.export(
                         records: records, to: url,
-                        options: .init(delimiter: delimiter, multiValueSeparator: separator),
+                        options: .init(delimiter: delimiter, multiValueSeparator: separator, mode: mode),
                         onProgress: progress)
                 }
             }.value

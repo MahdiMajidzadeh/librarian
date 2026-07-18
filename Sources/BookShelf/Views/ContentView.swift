@@ -224,7 +224,8 @@ struct ContentView: View {
             Menu {
                 Button("JSON…") { Task { await model.export(.json(includeCovers: false)) } }
                 Button("JSON with Covers…") { Task { await model.export(.json(includeCovers: true)) } }
-                Button("CSV…") { Task { await model.export(.csv) } }
+                Button("CSV…") { Task { await model.export(.csv()) } }
+                Button("CSV — One Row per File…") { Task { await model.export(.csv(mode: .perFile)) } }
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
