@@ -25,15 +25,19 @@ struct LibraryGridView: View {
                                 model.openFile(file)
                             }
                         })
-                        .simultaneousGesture(TapGesture(count: 1).modifiers(.command).onEnded {
-                            if model.selection.contains(item.id) {
-                                model.selection.remove(item.id)
-                            } else {
-                                model.selection.insert(item.id)
-                            }
-                        })
+                        // One single-click handler for both plain and ⌘-click:
+                        // two competing TapGestures used to fire together and
+                        // wreck multi-selection.
                         .gesture(TapGesture(count: 1).onEnded {
-                            model.selection = [item.id]
+                            if NSEvent.modifierFlags.contains(.command) {
+                                if model.selection.contains(item.id) {
+                                    model.selection.remove(item.id)
+                                } else {
+                                    model.selection.insert(item.id)
+                                }
+                            } else {
+                                model.selection = [item.id]
+                            }
                         })
                         .contextMenu {
                             if model.selection.count > 1, model.selection.contains(item.id) {

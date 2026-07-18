@@ -20,6 +20,9 @@ struct ContentView: View {
             if let item = model.detailItem {
                 BookDetailView(item: item)
                     .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
+            } else if model.selection.count > 1 {
+                MultiSelectionPanel()
+                    .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
             }
         }
         .toolbar { toolbarContent }
@@ -58,7 +61,7 @@ struct ContentView: View {
     private var detailShownBinding: Binding<Bool> {
         let model = self.model
         return Binding(
-            get: { model.detailItem != nil },
+            get: { model.detailItem != nil || model.selection.count > 1 },
             set: { if !$0 { model.selection = [] } }
         )
     }
