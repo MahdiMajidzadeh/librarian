@@ -78,7 +78,22 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            if let summary = model.lastExportSummary {
+                Text("· \(summary)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
+            if let progress = model.exportProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                        .frame(width: 120)
+                    Text("Exporting \(progress.done)/\(progress.total)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let undo = model.undoableBatch {
                 Button("Undo Rename (\(undo.count))") {
                     Task { await model.undoLastRename() }
@@ -205,6 +220,16 @@ struct ContentView: View {
             }
             .disabled(model.items.isEmpty)
             .help("Preview and rename the selection (or all shown books) to your template")
+
+            Menu {
+                Button("JSON…") { Task { await model.export(.json(includeCovers: false)) } }
+                Button("JSON with Covers…") { Task { await model.export(.json(includeCovers: true)) } }
+                Button("CSV…") { Task { await model.export(.csv) } }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(model.items.isEmpty)
+            .help("Export the selection (or current filter result) as JSON or CSV")
 
             filterMenu
             sortMenu

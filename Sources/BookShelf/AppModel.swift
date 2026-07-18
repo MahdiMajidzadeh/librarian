@@ -571,6 +571,68 @@ final class AppModel {
         }
     }
 
+    // MARK: - Export (FR-5)
+
+    private(set) var exportProgress: (done: Int, total: Int)?
+    private(set) var lastExportSummary: String?
+
+    enum ExportKind {
+        case json(includeCovers: Bool)
+        case csv
+    }
+
+    /// Export scope (FR-5.1): the selection when present, otherwise the
+    /// current filter result.
+    private var exportBookIds: [Int64] {
+        selection.isEmpty ? displayedItems.map(\.id) : Array(selection)
+    }
+
+    func export(_ kind: ExportKind) async {
+        let ids = exportBookIds
+        guard !ids.isEmpty else { return }
+
+        let panel = NSSavePanel()
+        switch kind {
+        case .json:
+            panel.nameFieldStringValue = "library.json"
+        case .csv:
+            panel.nameFieldStringValue = "library.csv"
+        }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        exportProgress = (0, ids.count)
+        defer { exportProgress = nil }
+        do {
+            let records = try await ExportRecord.fetch(from: database, bookIds: ids)
+            let progress: @Sendable (Int, Int) -> Void = { done, total in
+                Task { @MainActor [weak self] in
+                    self?.exportProgress = (done, total)
+                }
+            }
+            let coverCache = self.coverCache
+            let delimiter = settingValue("csvDelimiter", default: ",")
+            let separator = settingValue("csvMultiValueSeparator", default: "; ")
+            try await Task.detached(priority: .userInitiated) {
+                switch kind {
+                case .json(let includeCovers):
+                    try JSONExporter.export(
+                        records: records, to: url,
+                        includeCovers: includeCovers, coverCache: coverCache,
+                        onProgress: progress)
+                case .csv:
+                    try CSVExporter.export(
+                        records: records, to: url,
+                        options: .init(delimiter: delimiter, multiValueSeparator: separator),
+                        onProgress: progress)
+                }
+            }.value
+            lastExportSummary = "Exported \(records.count) books to \(url.lastPathComponent)"
+        } catch {
+            errorMessage = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - File actions
 
     func openFile(_ file: BookFile) {
