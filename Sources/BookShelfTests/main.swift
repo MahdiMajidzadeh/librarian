@@ -3,6 +3,16 @@ import GRDB
 import ZIPFoundation
 import BookShelfKit
 
+// `swift run bookshelf-tests --seed <dir>` writes a small demo library of
+// generated fixture books for manual end-to-end testing, then exits.
+if let seedIndex = CommandLine.arguments.firstIndex(of: "--seed"),
+   CommandLine.arguments.count > seedIndex + 1 {
+    let dir = URL(fileURLWithPath: CommandLine.arguments[seedIndex + 1])
+    try Fixtures.seedDemoLibrary(at: dir)
+    print("Seeded demo library at \(dir.path)")
+    exit(0)
+}
+
 let runner = TestRunner.shared
 
 // MARK: - Scaffold smoke tests
@@ -25,5 +35,6 @@ await mobiParserTests(runner)
 await lookupTests(runner)
 await renameTests(runner)
 await exportTests(runner)
+await endToEndTests(runner)
 
 runner.finish()
