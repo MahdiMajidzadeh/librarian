@@ -104,6 +104,12 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "book") { t in
+                t.add(column: "coverSourceFormat", .text)
+            }
+        }
+
         return migrator
     }
 }

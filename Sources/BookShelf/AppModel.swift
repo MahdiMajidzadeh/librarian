@@ -164,6 +164,26 @@ final class AppModel {
         scanProgress = nil
     }
 
+    /// Re-reads embedded metadata from every present file (fill-empty; covers
+    /// upgrade per source ranking). Useful after parser improvements — normal
+    /// rescans skip unchanged files.
+    func reextractMetadata() async {
+        guard !isScanning else { return }
+        scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
+        let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+        do {
+            let count = try await pipeline.reextractEmbedded { done, total in
+                Task { @MainActor [weak self] in
+                    self?.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
+                }
+            }
+            lastResolveSummary = "Re-extracted embedded metadata from \(count) files"
+        } catch {
+            errorMessage = "Re-extract failed: \(error.localizedDescription)"
+        }
+        scanProgress = nil
+    }
+
     func purgeMissing() async {
         do {
             _ = try await LibraryScanner(database: database).purgeMissing()

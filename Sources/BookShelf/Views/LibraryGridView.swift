@@ -58,7 +58,7 @@ struct BookGridCell: View {
 
             Text(item.book.title)
                 .font(.callout.weight(.medium))
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
             if !item.book.authors.isEmpty {
                 Text(item.book.authors.joined(separator: ", "))
                     .font(.caption)
@@ -82,9 +82,19 @@ struct CoverView: View {
 
     var body: some View {
         if let path, let image = CoverImageLoader.shared.image(atPath: path) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+            // The image lives in an overlay so its natural size can never push
+            // the cell wider than the grid column (wide covers used to bleed
+            // across neighboring cells). Jacket spreads and other wide images
+            // anchor trailing, showing the front cover instead of the spine.
+            let isWide = image.size.width > image.size.height * 1.15
+            Rectangle()
+                .fill(.clear)
+                .overlay(alignment: isWide ? .trailing : .center) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                }
+                .clipped()
         } else {
             ZStack {
                 Rectangle().fill(placeholderColor.gradient)
@@ -111,11 +121,16 @@ final class CoverImageLoader {
     private let cache = NSCache<NSString, NSImage>()
 
     func image(atPath path: String) -> NSImage? {
-        if let cached = cache.object(forKey: path as NSString) {
+        // Covers are rewritten in place (e.g. a better embedded cover replaces
+        // a PDF render), so the cache key includes the file's mtime.
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)
+            .map { String($0.timeIntervalSince1970) } ?? "0"
+        let key = "\(path)|\(mtime)" as NSString
+        if let cached = cache.object(forKey: key) {
             return cached
         }
         guard let image = NSImage(contentsOfFile: path) else { return nil }
-        cache.setObject(image, forKey: path as NSString)
+        cache.setObject(image, forKey: key)
         return image
     }
 

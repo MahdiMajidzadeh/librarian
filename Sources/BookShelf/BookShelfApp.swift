@@ -34,6 +34,24 @@ struct BookShelfApp: App {
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(model.undoableBatch == nil)
             }
+            CommandMenu("Library") {
+                Button("Rescan Folder") {
+                    Task { await model.scan() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.libraryFolder == nil || model.isScanning)
+
+                Button("Re-extract Embedded Metadata") {
+                    Task { await model.reextractMetadata() }
+                }
+                .disabled(model.items.isEmpty || model.isScanning)
+
+                Divider()
+
+                Button("Purge Missing Files") {
+                    Task { await model.purgeMissing() }
+                }
+            }
         }
 
         Settings {

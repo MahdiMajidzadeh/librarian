@@ -94,10 +94,17 @@ public final class ScanPipeline: Sendable {
                 book.tags = meta.subjects
                 touchedFields.append("tags")
             }
-            if book.coverCachePath == nil, let coverData = meta.coverData,
-               let gridURL = try? coverCache.store(imageData: coverData, bookId: bookId) {
-                book.coverCachePath = gridURL.path
-                touchedFields.append("cover")
+            // Cover quality ranking: a real embedded cover (epub/mobi/azw3)
+            // replaces a PDF first-page render, never the other way round.
+            if let coverData = meta.coverData {
+                let incoming = coverRank(prepared.file.format)
+                let existing = book.coverCachePath == nil ? 0 : coverRank(book.coverSourceFormat)
+                if incoming > existing,
+                   let gridURL = try? coverCache.store(imageData: coverData, bookId: bookId) {
+                    book.coverCachePath = gridURL.path
+                    book.coverSourceFormat = prepared.file.format
+                    touchedFields.append("cover")
+                }
             }
         }
 
@@ -112,6 +119,56 @@ public final class ScanPipeline: Sendable {
         for field in touchedFields {
             try ProvenanceRecord(bookId: bookId, field: field, source: .embedded).save(db)
         }
+    }
+
+    /// Higher = better cover source. PDF covers are first-page renders, so
+    /// any true embedded cover outranks them. Unknown (pre-v2 rows) ranks
+    /// with PDF so a real embedded cover can still take over.
+    private static func coverRank(_ format: BookFormat?) -> Int {
+        switch format {
+        case .epub, .mobi, .azw3: return 2
+        case .pdf, nil: return 1
+        default: return 1
+        }
+    }
+
+    /// Re-runs embedded metadata extraction over every known, present file —
+    /// used after parser/ranking improvements, since incremental rescans skip
+    /// unchanged files. Fill-empty semantics: manual and online data survive;
+    /// only empty fields and lower-ranked covers change.
+    @discardableResult
+    public func reextractEmbedded(
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> Int {
+        let files = try await database.writer.read { db in
+            try BookFile
+                .filter(BookFile.Columns.missingFlag == false)
+                .fetchAll(db)
+        }
+        let parseable = files.filter { $0.format.supportsEmbeddedMetadata }
+        let coverCache = self.coverCache
+
+        var processed = 0
+        for file in parseable {
+            let url = URL(fileURLWithPath: file.path)
+            guard case .success(let meta)? = MetadataExtractor.extract(url: url, format: file.format) else {
+                processed += 1
+                onProgress?(processed, parseable.count)
+                continue
+            }
+            let prepared = PreparedFile(
+                file: ScannedFile(url: url, format: file.format,
+                                  sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt),
+                seed: .fromFilename(url),
+                metadata: meta)
+            let bookId = file.bookId
+            try await database.writer.write { db in
+                try Self.applyEmbedded(db, bookId: bookId, prepared: prepared, coverCache: coverCache)
+            }
+            processed += 1
+            onProgress?(processed, parseable.count)
+        }
+        return parseable.count
     }
 
     /// True when the book's title still looks like it came from a filename

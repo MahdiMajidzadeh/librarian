@@ -73,7 +73,9 @@ private struct CandidateRow: View {
             HStack(alignment: .top, spacing: 10) {
                 AsyncImage(url: candidate.coverURL) { phase in
                     if let image = phase.image {
-                        image.resizable().aspectRatio(contentMode: .fill)
+                        Rectangle().fill(.clear)
+                            .overlay { image.resizable().aspectRatio(contentMode: .fill) }
+                            .clipped()
                     } else {
                         Rectangle().fill(.quaternary)
                             .overlay(Image(systemName: "book.closed").foregroundStyle(.tertiary))

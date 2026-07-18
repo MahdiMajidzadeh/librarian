@@ -60,6 +60,9 @@ public struct Book: Codable, Identifiable, Equatable, Sendable {
     public var bookDescription: String?
     public var tags: [String]
     public var coverCachePath: String?
+    /// Format of the file that supplied the current cover — used to rank
+    /// real embedded covers (epub/mobi) above PDF first-page renders.
+    public var coverSourceFormat: BookFormat?
     public var metadataStatus: MetadataStatus
     public var groupMethod: GroupMethod
     public var groupKey: String?
@@ -84,6 +87,7 @@ public struct Book: Codable, Identifiable, Equatable, Sendable {
         bookDescription: String? = nil,
         tags: [String] = [],
         coverCachePath: String? = nil,
+        coverSourceFormat: BookFormat? = nil,
         metadataStatus: MetadataStatus = .unresolved,
         groupMethod: GroupMethod = .single,
         groupKey: String? = nil,
@@ -107,6 +111,7 @@ public struct Book: Codable, Identifiable, Equatable, Sendable {
         self.bookDescription = bookDescription
         self.tags = tags
         self.coverCachePath = coverCachePath
+        self.coverSourceFormat = coverSourceFormat
         self.metadataStatus = metadataStatus
         self.groupMethod = groupMethod
         self.groupKey = groupKey

@@ -46,6 +46,63 @@ extension Fixtures {
 /// Full-pipeline test over real generated files: scan → parse → group →
 /// covers → rescan → export, mirroring the §6.2 acceptance criteria.
 func endToEndTests(_ runner: TestRunner) async {
+    await runner.run("cover ranking: embedded epub cover replaces pdf page render") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            // PDF arrives first and claims the cover with its page render.
+            try Fixtures.makePDF(at: library.appendingPathComponent("Dune - Frank Herbert.pdf"))
+            _ = try await pipeline.scan(root: library)
+            var book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.coverSourceFormat, .pdf)
+            expectNotNil(book?.coverCachePath).map { _ in }
+
+            // The epub joins the same book; its real cover must win.
+            try Fixtures.makeEpub(at: library.appendingPathComponent("dune.epub"))
+            _ = try await pipeline.scan(root: library)
+            let bookCount = try await database.writer.read { try Book.fetchCount($0) }
+            expectEqual(bookCount, 1, "pdf and epub must group into one book")
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.coverSourceFormat, .epub, "embedded cover should replace pdf render")
+
+            // Re-extract keeps the epub cover (pdf never downgrades it).
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.coverSourceFormat, .epub)
+        }
+    }
+
+    await runner.run("re-extract upgrades covers on an already-scanned library") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            try Fixtures.makePDF(at: library.appendingPathComponent("Dune - Frank Herbert.pdf"))
+            try Fixtures.makeEpub(at: library.appendingPathComponent("dune.epub"))
+            _ = try await pipeline.scan(root: library)
+
+            // Simulate a pre-ranking database: force the cover back to the pdf.
+            try await database.writer.write { db in
+                var book = try Book.fetchOne(db)!
+                book.coverSourceFormat = nil   // unknown provenance, as after migration
+                try book.update(db)
+            }
+
+            let processed = try await pipeline.reextractEmbedded()
+            expectEqual(processed, 2)
+            let book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.coverSourceFormat, .epub,
+                        "re-extract must upgrade an unknown-provenance cover to the epub one")
+        }
+    }
+
     await runner.run("e2e: scan groups Dune trio, parses Persian epub, exports valid JSON") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")
