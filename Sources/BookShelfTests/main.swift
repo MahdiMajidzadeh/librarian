@@ -20,5 +20,6 @@ await databaseTests(runner)
 await scannerTests(runner)
 await groupingTests(runner)
 await epubParserTests(runner)
+await pdfParserTests(runner)
 
 runner.finish()
