@@ -16,4 +16,6 @@ await runner.run("dependencies link and SQLite works") {
     expectEqual(BookShelfKit.version, "0.1.0")
 }
 
+await databaseTests(runner)
+
 runner.finish()
