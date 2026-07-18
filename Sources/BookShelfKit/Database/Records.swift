@@ -138,13 +138,13 @@ public struct Book: Codable, Identifiable, Equatable, Sendable {
 extension Book: FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "book"
 
-    enum Columns {
-        static let title = Column(CodingKeys.title)
-        static let titleSort = Column(CodingKeys.titleSort)
-        static let year = Column(CodingKeys.year)
-        static let updatedAt = Column(CodingKeys.updatedAt)
-        static let groupKey = Column(CodingKeys.groupKey)
-        static let metadataStatus = Column(CodingKeys.metadataStatus)
+    public enum Columns {
+        public static let title = Column(CodingKeys.title)
+        public static let titleSort = Column(CodingKeys.titleSort)
+        public static let year = Column(CodingKeys.year)
+        public static let updatedAt = Column(CodingKeys.updatedAt)
+        public static let groupKey = Column(CodingKeys.groupKey)
+        public static let metadataStatus = Column(CodingKeys.metadataStatus)
     }
 
     public static let files = hasMany(BookFile.self)
@@ -195,10 +195,10 @@ public struct BookFile: Codable, Identifiable, Equatable, Sendable {
 extension BookFile: FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "bookFile"
 
-    enum Columns {
-        static let bookId = Column(CodingKeys.bookId)
-        static let path = Column(CodingKeys.path)
-        static let missingFlag = Column(CodingKeys.missingFlag)
+    public enum Columns {
+        public static let bookId = Column(CodingKeys.bookId)
+        public static let path = Column(CodingKeys.path)
+        public static let missingFlag = Column(CodingKeys.missingFlag)
     }
 
     public static let book = belongsTo(Book.self)
@@ -227,9 +227,9 @@ public struct ProvenanceRecord: Codable, Equatable, Sendable {
 extension ProvenanceRecord: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "provenance"
 
-    enum Columns {
-        static let bookId = Column(CodingKeys.bookId)
-        static let field = Column(CodingKeys.field)
+    public enum Columns {
+        public static let bookId = Column(CodingKeys.bookId)
+        public static let field = Column(CodingKeys.field)
     }
 }
 
@@ -266,10 +266,10 @@ public struct RenameLogEntry: Codable, Identifiable, Equatable, Sendable {
 extension RenameLogEntry: FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "renameLog"
 
-    enum Columns {
-        static let batchId = Column(CodingKeys.batchId)
-        static let executedAt = Column(CodingKeys.executedAt)
-        static let revertedFlag = Column(CodingKeys.revertedFlag)
+    public enum Columns {
+        public static let batchId = Column(CodingKeys.batchId)
+        public static let executedAt = Column(CodingKeys.executedAt)
+        public static let revertedFlag = Column(CodingKeys.revertedFlag)
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
