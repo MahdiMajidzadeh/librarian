@@ -8,6 +8,12 @@ public struct ScanProgress: Sendable, Equatable {
     public var phase: Phase
     public var processed: Int
     public var total: Int
+
+    public init(phase: Phase, processed: Int, total: Int) {
+        self.phase = phase
+        self.processed = processed
+        self.total = total
+    }
 }
 
 public struct ScanResult: Sendable, Equatable {
@@ -30,6 +36,29 @@ public struct ScannedFile: Sendable {
     }
 }
 
+/// A new file after preparation (parsing, seed computation). Preparation runs
+/// outside database transactions so expensive work (PDF rendering, zip
+/// reads) never blocks writes.
+public struct PreparedFile: Sendable {
+    public let file: ScannedFile
+    public let seed: GroupingSeed
+    public let metadata: EmbeddedMetadata?
+    public let parseErrorNote: String?
+
+    public init(file: ScannedFile, seed: GroupingSeed,
+                metadata: EmbeddedMetadata? = nil, parseErrorNote: String? = nil) {
+        self.file = file
+        self.seed = seed
+        self.metadata = metadata
+        self.parseErrorNote = parseErrorNote
+    }
+
+    /// Filename-only preparation (no embedded parsing).
+    public static func filenameOnly(_ file: ScannedFile) -> PreparedFile {
+        PreparedFile(file: file, seed: .fromFilename(file.url))
+    }
+}
+
 // MARK: - Scanner
 
 /// Recursively scans the library root, keeping the database in sync with disk.
@@ -40,20 +69,28 @@ public struct ScannedFile: Sendable {
 public final class LibraryScanner {
     private let database: AppDatabase
 
-    /// Called for each new or content-changed file to produce/refresh its book.
-    /// Replaced by the grouping + metadata pipeline in later milestones; the
-    /// default creates one book per file titled after the filename stem.
-    public typealias BookAssigner = (_ db: Database, _ file: ScannedFile) throws -> Int64
+    /// Runs outside the write transaction for each new file: parse embedded
+    /// metadata, compute the grouping seed.
+    public typealias FilePreparer = @Sendable (_ file: ScannedFile) -> PreparedFile
 
+    /// Called inside the write transaction for each new file to produce its
+    /// book. The default creates one book per file titled after the filename
+    /// stem; the scan pipeline supplies grouping + metadata application.
+    public typealias BookAssigner = (_ db: Database, _ prepared: PreparedFile) throws -> Int64
+
+    private let prepare: FilePreparer
     private let assignBook: BookAssigner
 
-    public init(database: AppDatabase, assignBook: BookAssigner? = nil) {
+    public init(database: AppDatabase,
+                prepare: FilePreparer? = nil,
+                assignBook: BookAssigner? = nil) {
         self.database = database
+        self.prepare = prepare ?? { PreparedFile.filenameOnly($0) }
         self.assignBook = assignBook ?? Self.defaultAssigner
     }
 
-    public static let defaultAssigner: BookAssigner = { db, file in
-        var book = Book(title: file.url.deletingPathExtension().lastPathComponent)
+    public static let defaultAssigner: BookAssigner = { db, prepared in
+        var book = Book(title: prepared.file.url.deletingPathExtension().lastPathComponent)
         try book.insert(db)
         return book.id!
     }
@@ -120,11 +157,12 @@ public final class LibraryScanner {
         enum Action: Sendable {
             case rediscovered(BookFile)
             case changed(BookFile, ScannedFile)
-            case new(ScannedFile)
+            case new(PreparedFile)
         }
 
         for chunk in files.chunked(into: 64) {
             var actions: [Action] = []
+            var newFiles: [ScannedFile] = []
             for file in chunk {
                 if let existing = knownByPath.removeValue(forKey: file.url.path) {
                     if existing.contentKey == file.contentKey {
@@ -137,8 +175,24 @@ public final class LibraryScanner {
                         actions.append(.changed(existing, file))
                     }
                 } else {
-                    actions.append(.new(file))
+                    newFiles.append(file)
                 }
+            }
+
+            // Parse new files concurrently, outside the write transaction.
+            if !newFiles.isEmpty {
+                let prepare = self.prepare
+                let prepared = await withTaskGroup(of: PreparedFile.self) { group in
+                    for file in newFiles {
+                        group.addTask { prepare(file) }
+                    }
+                    var results: [PreparedFile] = []
+                    for await item in group {
+                        results.append(item)
+                    }
+                    return results
+                }
+                actions.append(contentsOf: prepared.map { .new($0) })
             }
 
             let plan = actions
@@ -154,14 +208,14 @@ public final class LibraryScanner {
                         record.contentKey = file.contentKey
                         record.missingFlag = false
                         try record.update(db)
-                    case .new(let file):
-                        let bookId = try assignBook(db, file)
+                    case .new(let prepared):
+                        let bookId = try assignBook(db, prepared)
                         var record = BookFile(
                             bookId: bookId,
-                            path: file.url.path,
-                            format: file.format,
-                            sizeBytes: file.sizeBytes,
-                            modifiedAt: file.modifiedAt
+                            path: prepared.file.url.path,
+                            format: prepared.file.format,
+                            sizeBytes: prepared.file.sizeBytes,
+                            modifiedAt: prepared.file.modifiedAt
                         )
                         try record.insert(db)
                     }

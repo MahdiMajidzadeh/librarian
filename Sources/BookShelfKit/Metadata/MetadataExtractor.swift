@@ -26,15 +26,4 @@ public enum MetadataExtractor {
         }
     }
 
-    /// Grouping seed for a scanned file: embedded metadata when parseable,
-    /// filename stem always.
-    public static func groupingSeed(for file: ScannedFile) -> GroupingSeed {
-        var seed = GroupingSeed.fromFilename(file.url)
-        if case .success(let meta)? = extract(url: file.url, format: file.format) {
-            seed.isbn = meta.isbn
-            seed.title = meta.title
-            seed.authors = meta.authors
-        }
-        return seed
-    }
 }

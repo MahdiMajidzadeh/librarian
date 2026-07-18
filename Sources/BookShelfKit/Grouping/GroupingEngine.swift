@@ -151,14 +151,10 @@ public final class GroupingEngine: @unchecked Sendable {
         }
     }
 
-    /// Wraps this engine as a scanner assigner. `seedProvider` extracts
-    /// embedded metadata (parsers arrive in later milestones); by default the
-    /// seed comes from the filename alone.
-    public func makeAssigner(
-        seedProvider: @escaping @Sendable (ScannedFile) -> GroupingSeed = { .fromFilename($0.url) }
-    ) -> LibraryScanner.BookAssigner {
-        { db, file in
-            try self.assignBook(db, seed: seedProvider(file))
+    /// Wraps this engine as a scanner assigner, grouping on the prepared seed.
+    public func makeAssigner() -> LibraryScanner.BookAssigner {
+        { db, prepared in
+            try self.assignBook(db, seed: prepared.seed)
         }
     }
 
