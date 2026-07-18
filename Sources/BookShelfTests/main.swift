@@ -21,5 +21,6 @@ await scannerTests(runner)
 await groupingTests(runner)
 await epubParserTests(runner)
 await pdfParserTests(runner)
+await mobiParserTests(runner)
 
 runner.finish()
