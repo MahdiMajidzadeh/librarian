@@ -345,6 +345,18 @@ final class AppModel {
         }
     }
 
+    /// Dissolves a whole group: every file becomes its own book.
+    func ungroup(bookId: Int64) async {
+        do {
+            _ = try await database.writer.write { db in
+                try GroupingOperations.ungroup(db, bookId: bookId)
+            }
+            selection = [bookId]
+        } catch {
+            errorMessage = "Ungroup failed: \(error.localizedDescription)"
+        }
+    }
+
     func split(fileId: Int64) async {
         do {
             let newBookId = try await database.writer.write { db in

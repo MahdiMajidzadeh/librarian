@@ -53,6 +53,12 @@ struct LibraryTableView: View {
                     Task { await model.mergeSelection() }
                 }
             } else if let id = ids.first, let item = model.items.first(where: { $0.id == id }) {
+                if item.files.count > 1 {
+                    Button("Ungroup — One Book per File") {
+                        Task { await model.ungroup(bookId: id) }
+                    }
+                    Divider()
+                }
                 ForEach(item.files, id: \.path) { file in
                     Button("Reveal \(URL(fileURLWithPath: file.path).lastPathComponent)") {
                         model.revealInFinder(file)

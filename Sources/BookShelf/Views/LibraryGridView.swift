@@ -35,6 +35,27 @@ struct LibraryGridView: View {
                         .gesture(TapGesture(count: 1).onEnded {
                             model.selection = [item.id]
                         })
+                        .contextMenu {
+                            if model.selection.count > 1, model.selection.contains(item.id) {
+                                Button("Merge \(model.selection.count) Books into One") {
+                                    Task { await model.mergeSelection() }
+                                }
+                            }
+                            if item.files.count > 1 {
+                                Button("Ungroup — One Book per File") {
+                                    Task { await model.ungroup(bookId: item.id) }
+                                }
+                            }
+                            Divider()
+                            Button("Resolve Metadata Online") {
+                                Task { await model.resolveMetadata(ids: [item.id]) }
+                            }
+                            if let file = item.files.first(where: { !$0.missingFlag }) {
+                                Button("Reveal in Finder") {
+                                    model.revealInFinder(file)
+                                }
+                            }
+                        }
                 }
             }
             .padding(16)

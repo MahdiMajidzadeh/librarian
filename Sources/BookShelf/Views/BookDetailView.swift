@@ -59,6 +59,15 @@ struct BookDetailView: View {
             } label: {
                 Label("Edit…", systemImage: "pencil")
             }
+
+            if item.files.count > 1 {
+                Button {
+                    Task { await model.ungroup(bookId: item.id) }
+                } label: {
+                    Label("Ungroup", systemImage: "square.split.diagonal")
+                }
+                .help("Split every file of this book into its own entry — use when files were grouped wrongly")
+            }
         }
         .controlSize(.small)
     }

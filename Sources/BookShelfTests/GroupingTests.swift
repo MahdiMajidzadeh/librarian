@@ -23,6 +23,43 @@ func groupingRegressionTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("ungroup dissolves a book into manual per-file books that never re-join") {
+        let database = try AppDatabase.inMemory()
+        let bookId = try await database.writer.write { db -> Int64 in
+            var book = Book(title: "Dune", authors: ["Frank Herbert"], groupMethod: .filename)
+            try book.insert(db)
+            for name in ["dune.epub", "dune_v2.pdf", "dune (ocr).mobi"] {
+                var file = BookFile(bookId: book.id!, path: "/b/\(name)",
+                                    format: BookFormat(rawValue: String(name.split(separator: ".").last!))!,
+                                    sizeBytes: 10, modifiedAt: Date())
+                try file.insert(db)
+            }
+            return book.id!
+        }
+
+        let newIds = try await database.writer.write { db in
+            try GroupingOperations.ungroup(db, bookId: bookId)
+        }
+        expectEqual(newIds.count, 2, "two files split out, first stays")
+
+        let books = try await database.writer.read { try Book.fetchAll($0) }
+        let files = try await database.writer.read { try BookFile.fetchAll($0) }
+        expectEqual(books.count, 3, "one book per file")
+        expect(books.allSatisfy(\.manualGroup), "all pieces flagged manual: \(books.map(\.manualGroup))")
+        expectEqual(Set(files.map(\.bookId)).count, 3, "each file owns its book")
+
+        // The manual flag must keep the engine from re-joining them.
+        let engine = try await database.writer.read { try GroupingEngine.load($0) }
+        expectEqual(engine.decide(GroupingSeed(rawStem: "dune")), .createNew,
+                    "manual books are invisible to auto-grouping")
+
+        // Ungrouping a single-file book is a no-op.
+        let noop = try await database.writer.write { db in
+            try GroupingOperations.ungroup(db, bookId: bookId)
+        }
+        expect(noop.isEmpty, "single-file book cannot be ungrouped further")
+    }
+
     await runner.run("numeric and stopword-only title keys are not viable") {
         expect(!GroupingEngine.isViableTitleKey("2007"), "bare year")
         expect(!GroupingEngine.isViableTitleKey("the"), "stopword")

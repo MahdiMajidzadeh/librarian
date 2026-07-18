@@ -311,6 +311,30 @@ public enum GroupingOperations {
         try target.update(db)
     }
 
+    /// Dissolves a group entirely: every file becomes its own manual book.
+    /// The original book keeps its first file (and its metadata) and is
+    /// flagged manual so rescans and regroups never re-join it.
+    @discardableResult
+    public static func ungroup(_ db: Database, bookId: Int64) throws -> [Int64] {
+        let files = try BookFile
+            .filter(BookFile.Columns.bookId == bookId)
+            .order(BookFile.Columns.path)
+            .fetchAll(db)
+        guard files.count > 1 else { return [] }
+
+        var newBookIds: [Int64] = []
+        for file in files.dropFirst() {
+            newBookIds.append(try split(db, fileId: file.id!))
+        }
+        if var book = try Book.fetchOne(db, key: bookId) {
+            book.groupMethod = .manual
+            book.manualGroup = true
+            book.updatedAt = Date()
+            try book.update(db)
+        }
+        return newBookIds
+    }
+
     /// Splits one file out into its own (manual) book and returns its id.
     /// If the source book has no files left, it is deleted.
     @discardableResult
