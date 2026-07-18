@@ -21,7 +21,7 @@ struct BookShelfApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Book Shelf") {
+        WindowGroup("Librarian") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 760, minHeight: 480)

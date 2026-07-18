@@ -159,7 +159,7 @@ struct ContentView: View {
         ContentUnavailableView {
             Label("No Library Folder", systemImage: "books.vertical")
         } description: {
-            Text("Point Book Shelf at your books folder. Files are read in place — nothing is moved or copied.")
+            Text("Point Librarian at your books folder. Files are read in place — nothing is moved or copied.")
         } actions: {
             Button("Choose Folder…") { model.chooseLibraryFolder() }
                 .buttonStyle(.borderedProminent)

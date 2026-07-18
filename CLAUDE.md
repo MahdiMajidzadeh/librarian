@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Book Shelf — native macOS 14+ SwiftUI app that catalogs a folder of ebooks
+Librarian — native macOS 14+ SwiftUI app that catalogs a folder of ebooks
 **in place** (no files moved, only renamed with preview + undo). Spec lives in
 [requirements.md](requirements.md); FR/NFR numbers in code comments refer to it.
 
@@ -25,8 +25,8 @@ This machine has **no Xcode**, only Command Line Tools (Swift 5.9.2). Consequenc
 swift build                                # debug build
 swift run bookshelf-tests                  # full test suite (66 tests)
 swift run bookshelf-tests --seed <dir>     # generate demo library of fixture books
-Scripts/make-app.sh                        # release build → "Book Shelf.app" (unsigned)
-open "Book Shelf.app"
+Scripts/make-app.sh                        # release build → Librarian.app (unsigned)
+open Librarian.app
 ```
 
 Verify UI changes by launching the binary and checking it stays alive:

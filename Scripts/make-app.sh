@@ -1,11 +1,11 @@
 #!/bin/bash
-# Builds Book Shelf.app from the SPM executable.
+# Builds Librarian.app from the SPM executable.
 # Usage: Scripts/make-app.sh [output-dir]   (default: repo root)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 OUT_DIR="${1:-.}"
-APP="$OUT_DIR/Book Shelf.app"
+APP="$OUT_DIR/Librarian.app"
 
 echo "Building release binary…"
 swift build -c release
@@ -13,7 +13,7 @@ swift build -c release
 echo "Assembling $APP…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/BookShelf "$APP/Contents/MacOS/BookShelf"
+cp .build/release/BookShelf "$APP/Contents/MacOS/Librarian"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,13 +21,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>BookShelf</string>
+    <string>Librarian</string>
     <key>CFBundleIdentifier</key>
-    <string>local.bookshelf</string>
+    <string>local.librarian</string>
     <key>CFBundleName</key>
-    <string>Book Shelf</string>
+    <string>Librarian</string>
     <key>CFBundleDisplayName</key>
-    <string>Book Shelf</string>
+    <string>Librarian</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

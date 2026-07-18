@@ -1,4 +1,4 @@
-# Book Shelf
+# Librarian
 
 A native macOS app that catalogs a folder of ebooks **in place** — no library
 takeover, no moved files. It groups multi-format copies (epub + pdf + mobi)
@@ -18,8 +18,8 @@ Built against [requirements.md](requirements.md) (v1.0 draft, all P0 scope).
 
 ```bash
 swift build                      # debug build
-Scripts/make-app.sh              # release build → "Book Shelf.app"
-open "Book Shelf.app"
+Scripts/make-app.sh              # release build → Librarian.app
+open Librarian.app
 ```
 
 ## Tests
@@ -42,7 +42,7 @@ trio, a Persian epub, and friends) to try the app end-to-end:
 
 ```bash
 swift run bookshelf-tests --seed ~/BookShelfDemo
-open "Book Shelf.app"    # then choose ~/BookShelfDemo as the library folder
+open Librarian.app       # then choose ~/BookShelfDemo as the library folder
 ```
 
 ## Architecture
