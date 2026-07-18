@@ -17,5 +17,6 @@ await runner.run("dependencies link and SQLite works") {
 }
 
 await databaseTests(runner)
+await scannerTests(runner)
 
 runner.finish()
