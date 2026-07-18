@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
         Group {
             if model.libraryFolder == nil {
                 emptyState
@@ -13,10 +14,20 @@ struct ContentView: View {
                 libraryView
             }
         }
+        .searchable(text: $model.searchText, placement: .toolbar,
+                    prompt: "Title, author, series, ISBN, tag, filename")
+        .inspector(isPresented: detailShownBinding) {
+            if let item = model.detailItem {
+                BookDetailView(item: item)
+                    .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
+            }
+        }
         .toolbar { toolbarContent }
         .safeAreaInset(edge: .bottom) {
             if let progress = model.scanProgress {
                 ScanProgressBar(progress: progress)
+            } else {
+                statusBar
             }
         }
         .alert("Something went wrong", isPresented: errorBinding) {
@@ -24,6 +35,50 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+
+    @MainActor
+    private var detailShownBinding: Binding<Bool> {
+        let model = self.model
+        return Binding(
+            get: { model.detailItem != nil },
+            set: { if !$0 { model.selection = [] } }
+        )
+    }
+
+    private var statusBar: some View {
+        HStack {
+            Text(statusSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if model.selection.count >= 2 {
+                Button("Merge \(model.selection.count) Books") {
+                    Task { await model.mergeSelection() }
+                }
+                .controlSize(.small)
+            }
+            if model.items.contains(where: \.hasMissingFiles) {
+                Button("Purge Missing") {
+                    Task { await model.purgeMissing() }
+                }
+                .controlSize(.small)
+                .help("Remove entries whose files no longer exist on disk")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    private var statusSummary: String {
+        let total = model.items.count
+        let shown = model.displayedItems.count
+        let files = model.items.reduce(0) { $0 + $1.files.count }
+        if shown == total {
+            return "\(total) books · \(files) files"
+        }
+        return "\(shown) of \(total) books"
     }
 
     @MainActor
@@ -67,10 +122,6 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            if let folder = model.libraryFolder {
-                Text(folder.lastPathComponent)
-                    .foregroundStyle(.secondary)
-            }
             Button {
                 model.chooseLibraryFolder()
             } label: {
@@ -86,12 +137,88 @@ struct ContentView: View {
             .disabled(model.libraryFolder == nil || model.isScanning)
             .help("Rescan the library folder")
 
+            filterMenu
+            sortMenu
+
             Picker("View", selection: viewModeBinding) {
                 Label("Grid", systemImage: "square.grid.2x2").tag(ViewMode.grid)
                 Label("Table", systemImage: "list.bullet").tag(ViewMode.table)
             }
             .pickerStyle(.segmented)
         }
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Menu("Format") {
+                ForEach(BookFormat.allCases, id: \.self) { format in
+                    filterToggle(.format(format), label: format.rawValue.uppercased())
+                }
+            }
+            Menu("Metadata") {
+                filterToggle(.status(.complete), label: "Complete")
+                filterToggle(.status(.partial), label: "Partial")
+                filterToggle(.status(.unresolved), label: "Unresolved")
+            }
+            filterToggle(.missingOnDisk, label: "Missing on Disk")
+            filterToggle(.autoGrouped, label: "Auto-grouped")
+            if !model.allTags.isEmpty {
+                Menu("Tag") {
+                    ForEach(model.allTags, id: \.self) { tag in
+                        filterToggle(.tag(tag), label: tag)
+                    }
+                }
+            }
+            if !model.activeFilters.isEmpty {
+                Divider()
+                Button("Clear Filters") { model.activeFilters = [] }
+            }
+        } label: {
+            Label("Filter", systemImage: model.activeFilters.isEmpty
+                ? "line.3.horizontal.decrease.circle"
+                : "line.3.horizontal.decrease.circle.fill")
+        }
+        .help("Filter the library")
+    }
+
+    private func filterToggle(_ filter: LibraryFilter, label: String) -> some View {
+        Button {
+            if model.activeFilters.contains(filter) {
+                model.activeFilters.remove(filter)
+            } else {
+                model.activeFilters.insert(filter)
+            }
+        } label: {
+            if model.activeFilters.contains(filter) {
+                Label(label, systemImage: "checkmark")
+            } else {
+                Text(label)
+            }
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SortKey.allCases) { key in
+                Button {
+                    if model.sortKey == key {
+                        model.sortAscending.toggle()
+                    } else {
+                        model.sortKey = key
+                        model.sortAscending = true
+                    }
+                } label: {
+                    if model.sortKey == key {
+                        Label(key.label, systemImage: model.sortAscending ? "chevron.up" : "chevron.down")
+                    } else {
+                        Text(key.label)
+                    }
+                }
+            }
+        } label: {
+            Label("Sort", systemImage: "arrow.up.arrow.down")
+        }
+        .help("Sort the library")
     }
 
     private var viewModeBinding: Binding<ViewMode> {

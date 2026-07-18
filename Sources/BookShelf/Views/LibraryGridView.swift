@@ -11,17 +11,35 @@ struct LibraryGridView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(model.items) { item in
+                ForEach(model.displayedItems) { item in
                     BookGridCell(item: item)
-                        .onTapGesture(count: 2) {
+                        .padding(6)
+                        .background(
+                            model.selection.contains(item.id)
+                                ? AnyShapeStyle(.selection)
+                                : AnyShapeStyle(.clear),
+                            in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                        .gesture(TapGesture(count: 2).onEnded {
                             if let file = item.files.first(where: { !$0.missingFlag }) {
                                 model.openFile(file)
                             }
-                        }
+                        })
+                        .simultaneousGesture(TapGesture(count: 1).modifiers(.command).onEnded {
+                            if model.selection.contains(item.id) {
+                                model.selection.remove(item.id)
+                            } else {
+                                model.selection.insert(item.id)
+                            }
+                        })
+                        .gesture(TapGesture(count: 1).onEnded {
+                            model.selection = [item.id]
+                        })
                 }
             }
             .padding(16)
         }
+        .onTapGesture { model.selection = [] }
     }
 }
 

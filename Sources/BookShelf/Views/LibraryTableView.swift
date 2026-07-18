@@ -7,7 +7,7 @@ struct LibraryTableView: View {
 
     var body: some View {
         @Bindable var model = model
-        Table(model.items, selection: $model.selection) {
+        Table(model.displayedItems, selection: $model.selection) {
             TableColumn("Title") { item in
                 HStack(spacing: 6) {
                     Text(item.book.title)
@@ -47,7 +47,12 @@ struct LibraryTableView: View {
             .width(min: 70, ideal: 90)
         }
         .contextMenu(forSelectionType: Int64.self) { ids in
-            if let id = ids.first, let item = model.items.first(where: { $0.id == id }) {
+            if ids.count >= 2 {
+                Button("Merge \(ids.count) Books into One") {
+                    model.selection = ids
+                    Task { await model.mergeSelection() }
+                }
+            } else if let id = ids.first, let item = model.items.first(where: { $0.id == id }) {
                 ForEach(item.files, id: \.path) { file in
                     Button("Reveal \(URL(fileURLWithPath: file.path).lastPathComponent)") {
                         model.revealInFinder(file)
