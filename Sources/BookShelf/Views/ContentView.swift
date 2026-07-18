@@ -86,6 +86,11 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            if let summary = model.lastGroupSummary {
+                Text("· \(summary)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             if let progress = model.exportProgress {
                 HStack(spacing: 6) {

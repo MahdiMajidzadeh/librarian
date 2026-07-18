@@ -348,6 +348,8 @@ final class AppModel {
 
     // MARK: - Merge / split (FR-2.4)
 
+    private(set) var lastGroupSummary: String?
+
     func mergeSelection() async {
         Self.logAction("mergeSelection count=\(selection.count)")
         let ids = Array(selection)
@@ -356,13 +358,22 @@ final class AppModel {
         let ranked = selectedItems.sorted { a, b in
             rank(a.book.metadataStatus) > rank(b.book.metadataStatus)
         }
-        guard let target = ranked.first?.id else { return }
+        guard let targetItem = ranked.first else { return }
+        let target = targetItem.id
         let sources = ids.filter { $0 != target }
         do {
             try await database.writer.write { db in
                 try GroupingOperations.merge(db, sourceIds: sources, into: target)
             }
             selection = [target]
+            // Merging makes the book a manual group; under the Auto-grouped
+            // filter it leaves the visible list — say so, or it reads as
+            // the books disappearing.
+            var note = "Merged \(ids.count) books into “\(targetItem.book.title)”"
+            if activeFilters.contains(.autoGrouped) {
+                note += " — now hidden by the Auto-grouped filter"
+            }
+            lastGroupSummary = note
         } catch {
             errorMessage = "Merge failed: \(error.localizedDescription)"
         }
@@ -371,11 +382,17 @@ final class AppModel {
     /// Dissolves a whole group: every file becomes its own book.
     func ungroup(bookId: Int64) async {
         Self.logAction("ungroup book=\(bookId)")
+        let title = items.first { $0.id == bookId }?.book.title ?? "book"
         do {
-            _ = try await database.writer.write { db in
+            let newIds = try await database.writer.write { db in
                 try GroupingOperations.ungroup(db, bookId: bookId)
             }
             selection = [bookId]
+            var note = "Ungrouped “\(title)” into \(newIds.count + 1) books"
+            if activeFilters.contains(.autoGrouped) {
+                note += " — now hidden by the Auto-grouped filter"
+            }
+            lastGroupSummary = note
         } catch {
             errorMessage = "Ungroup failed: \(error.localizedDescription)"
         }
