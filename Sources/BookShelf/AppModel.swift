@@ -213,6 +213,26 @@ final class AppModel {
         scanProgress = nil
     }
 
+    /// Re-partitions automatic groups with the current rules (manual
+    /// merges/splits untouched; unchanged groups keep their book rows).
+    func rebuildGroups() async {
+        guard !isScanning else { return }
+        scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
+        let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+        do {
+            let summary = try await pipeline.rebuildGroups { done, total in
+                Task { @MainActor [weak self] in
+                    self?.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
+                }
+            }
+            lastResolveSummary =
+                "Regrouped: \(summary.groupsKept) kept, \(summary.booksRebuilt) rebuilt, \(summary.booksDissolved) removed"
+        } catch {
+            errorMessage = "Rebuild groups failed: \(error.localizedDescription)"
+        }
+        scanProgress = nil
+    }
+
     func purgeMissing() async {
         do {
             _ = try await LibraryScanner(database: database).purgeMissing()

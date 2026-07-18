@@ -29,6 +29,7 @@ await runner.run("dependencies link and SQLite works") {
 await databaseTests(runner)
 await scannerTests(runner)
 await groupingTests(runner)
+await groupingRegressionTests(runner)
 await epubParserTests(runner)
 await pdfParserTests(runner)
 await mobiParserTests(runner)

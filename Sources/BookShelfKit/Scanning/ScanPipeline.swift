@@ -179,6 +179,144 @@ public final class ScanPipeline: Sendable {
         return parseable.count
     }
 
+    // MARK: - Rebuild auto-groups
+
+    public struct RegroupSummary: Sendable, Equatable {
+        public var groupsKept = 0
+        public var booksRebuilt = 0
+        public var booksDissolved = 0
+        public init() {}
+    }
+
+    /// Re-partitions all automatically grouped files from scratch with the
+    /// current grouping rules — the recovery path after a grouping-rule fix,
+    /// since rescans never revisit known files.
+    ///
+    /// Manual merges/splits are untouched. A group whose file set comes out
+    /// identical keeps its existing book row (metadata, edits, provenance).
+    /// Only changed groups are rebuilt from embedded metadata.
+    public func rebuildGroups(
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> RegroupSummary {
+        let (allBooks, allFiles) = try await database.writer.read { db in
+            (try Book.fetchAll(db), try BookFile.fetchAll(db))
+        }
+        let manualIds = Set(allBooks.filter(\.manualGroup).compactMap(\.id))
+        let autoFiles = allFiles
+            .filter { !manualIds.contains($0.bookId) }
+            .sorted { $0.path < $1.path }
+
+        // Parse embedded metadata off-transaction.
+        var preparedByFile: [Int64: PreparedFile] = [:]
+        var processed = 0
+        for file in autoFiles {
+            let url = URL(fileURLWithPath: file.path)
+            var seed = GroupingSeed.fromFilename(url)
+            var metadata: EmbeddedMetadata?
+            if !file.missingFlag, file.format.supportsEmbeddedMetadata,
+               case .success(let meta)? = MetadataExtractor.extract(url: url, format: file.format) {
+                seed.isbn = meta.isbn
+                if let title = meta.title, !title.isEmpty {
+                    seed.title = title
+                }
+                seed.authors = meta.authors
+                metadata = meta
+            }
+            let scanned = ScannedFile(url: url, format: file.format,
+                                      sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt)
+            preparedByFile[file.id!] = PreparedFile(file: scanned, seed: seed, metadata: metadata)
+            processed += 1
+            onProgress?(processed, autoFiles.count)
+        }
+
+        // Partition with a fresh engine over synthetic group ids.
+        let engine = GroupingEngine()
+        var groups: [Int64: [BookFile]] = [:]
+        var groupMethods: [Int64: GroupMethod] = [:]
+        var nextGroupId: Int64 = 1
+        for file in autoFiles {
+            guard let prepared = preparedByFile[file.id!] else { continue }
+            let seed = prepared.seed
+            let groupId: Int64
+            switch engine.decide(seed) {
+            case .join(let id, let method):
+                groupId = id
+                let current = groupMethods[groupId] ?? .single
+                if GroupingEngine.methodRank(method) > GroupingEngine.methodRank(current) {
+                    groupMethods[groupId] = method
+                }
+            case .createNew:
+                groupId = nextGroupId
+                nextGroupId += 1
+                groupMethods[groupId] = .single
+            }
+            engine.register(bookId: groupId, isbn: seed.isbn, title: seed.title,
+                            authors: seed.authors, stems: [seed.rawStem])
+            groups[groupId, default: []].append(file)
+        }
+
+        // Groups identical to an existing book keep that book untouched.
+        var oldSets: [Int64: Set<Int64>] = [:]
+        for (bookId, files) in Dictionary(grouping: autoFiles, by: \.bookId) {
+            oldSets[bookId] = Set(files.compactMap(\.id))
+        }
+        var keptOldBooks = Set<Int64>()
+        var changedGroups: [(files: [BookFile], method: GroupMethod)] = []
+        var kept = 0
+        for (groupId, group) in groups {
+            let ids = Set(group.compactMap(\.id))
+            if let match = oldSets.first(where: { $0.value == ids && !keptOldBooks.contains($0.key) }) {
+                keptOldBooks.insert(match.key)
+                kept += 1
+            } else {
+                changedGroups.append((group, groupMethods[groupId] ?? .single))
+            }
+        }
+
+        let coverCache = self.coverCache
+        let plan = changedGroups
+        let preserved = keptOldBooks
+        let prepared = preparedByFile
+        let oldAutoBookIds = Set(oldSets.keys)
+
+        var summary = try await database.writer.write { db -> RegroupSummary in
+            var result = RegroupSummary()
+            for (group, method) in plan {
+                // Seed the new book from the group's best reading, then let
+                // each file's embedded metadata fill it in as during a scan.
+                let firstSeed = prepared[group[0].id!]?.seed
+                    ?? .fromFilename(URL(fileURLWithPath: group[0].path))
+                let bookId = try GroupingEngine().assignBook(db, seed: firstSeed)
+                for var file in group {
+                    file.bookId = bookId
+                    try file.update(db)
+                    if let preparedFile = prepared[file.id!] {
+                        try Self.applyEmbedded(db, bookId: bookId, prepared: preparedFile,
+                                               coverCache: coverCache)
+                    }
+                }
+                if group.count > 1, var book = try Book.fetchOne(db, key: bookId) {
+                    book.groupMethod = method
+                    try book.update(db)
+                }
+                result.booksRebuilt += 1
+            }
+            // Old auto books that lost all their files disappear.
+            for bookId in oldAutoBookIds where !preserved.contains(bookId) {
+                let remaining = try BookFile
+                    .filter(BookFile.Columns.bookId == bookId)
+                    .fetchCount(db)
+                if remaining == 0 {
+                    _ = try Book.deleteOne(db, key: bookId)
+                    result.booksDissolved += 1
+                }
+            }
+            return result
+        }
+        summary.groupsKept = kept
+        return summary
+    }
+
     private static func provenanceSource(
         _ db: Database, bookId: Int64, field: String
     ) throws -> ProvenanceSource? {

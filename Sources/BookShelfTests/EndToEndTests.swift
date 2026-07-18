@@ -135,6 +135,76 @@ func endToEndTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("rebuild auto-groups: splits mis-grouped files, keeps good groups and manual books") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            // A correct group (Dune epub+pdf) and two unrelated files.
+            try Fixtures.makeEpub(at: library.appendingPathComponent("dune.epub"))
+            try Fixtures.makePDF(at: library.appendingPathComponent("Dune - Frank Herbert.pdf"),
+                                 title: "Dune", author: "Frank Herbert",
+                                 subject: nil, keywords: nil)
+            var hyperion = Fixtures.MobiSpec()
+            hyperion.fullName = "Hyperion"
+            hyperion.authors = ["Dan Simmons"]
+            hyperion.isbn = "9780553283686"
+            try Fixtures.makeMobi(at: library.appendingPathComponent("hyperion.mobi"), spec: hyperion)
+            var bare = Fixtures.EpubSpec()
+            bare.title = "On Writing Well"
+            bare.authors = ["William Zinsser"]
+            bare.isbn = nil
+            try Fixtures.makeEpub(at: library.appendingPathComponent("zinsser.epub"), spec: bare)
+
+            _ = try await pipeline.scan(root: library)
+            let duneId = try await database.writer.read { db in
+                try Book.filter(Book.Columns.title == "Dune").fetchOne(db)?.id
+            }
+
+            // Simulate the old bug: force Hyperion + Zinsser into one bogus
+            // auto-grouped book, plus a manual book that must survive.
+            let (bogusId, manualId) = try await database.writer.write { db -> (Int64, Int64) in
+                let hyperionBook = try Book.filter(Book.Columns.title == "Hyperion").fetchOne(db)!
+                let zinsserBook = try Book.filter(Book.Columns.title == "On Writing Well").fetchOne(db)!
+                var files = try BookFile
+                    .filter([hyperionBook.id!, zinsserBook.id!].contains(BookFile.Columns.bookId))
+                    .fetchAll(db)
+                var bogus = Book(title: "Wrong Group", groupMethod: .filename)
+                try bogus.insert(db)
+                for index in files.indices {
+                    files[index].bookId = bogus.id!
+                    try files[index].update(db)
+                }
+                _ = try Book.deleteOne(db, key: hyperionBook.id!)
+                _ = try Book.deleteOne(db, key: zinsserBook.id!)
+
+                var manual = Book(title: "My Manual Pick", groupMethod: .manual, manualGroup: true)
+                try manual.insert(db)
+                return (bogus.id!, manual.id!)
+            }
+
+            let summary = try await pipeline.rebuildGroups()
+            expect(summary.groupsKept >= 1, "Dune group should be kept, got \(summary)")
+            expectEqual(summary.booksRebuilt, 2, "Hyperion and Zinsser rebuilt: \(summary)")
+            expectEqual(summary.booksDissolved, 1, "bogus book removed: \(summary)")
+
+            let books = try await database.writer.read { try Book.fetchAll($0) }
+            let titles = Set(books.map(\.title))
+            expect(titles.contains("Hyperion"), "Hyperion split back out: \(titles)")
+            expect(titles.contains("On Writing Well"), "Zinsser split back out: \(titles)")
+            expect(!books.contains { $0.id == bogusId }, "bogus group gone")
+            expect(books.contains { $0.id == manualId }, "manual book untouched")
+            expect(books.contains { $0.id == duneId }, "Dune kept its original row")
+            let duneFiles = try await database.writer.read { db in
+                try BookFile.filter(BookFile.Columns.bookId == duneId!).fetchCount(db)
+            }
+            expectEqual(duneFiles, 2, "Dune still owns both files")
+        }
+    }
+
     await runner.run("re-extract upgrades covers on an already-scanned library") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")

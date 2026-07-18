@@ -192,11 +192,35 @@ public final class GroupingEngine: @unchecked Sendable {
         return "\(titleKey)|\(authorKey)"
     }
 
+    /// Tokens that must never establish a match on their own — years glued
+    /// whole download collections into one book ("X - 2007", "Y - 2007"),
+    /// and stopword overlap faked author agreement.
+    static let weakTokens: Set<String> = [
+        "the", "a", "an", "of", "to", "and", "or", "in", "on", "for", "by",
+        "with", "at", "from", "etc", "et", "al", "vol", "volume", "edition", "ed",
+    ]
+
+    /// A title key is viable only if it contains at least one meaningful
+    /// token (≥2 chars, not a number, not a stopword). "2007" or "the" can
+    /// never identify a work.
+    public static func isViableTitleKey(_ key: String) -> Bool {
+        key.split(separator: " ").contains { token in
+            token.count >= 2 && !token.allSatisfy(\.isNumber) && !weakTokens.contains(String(token))
+        }
+    }
+
+    /// Author tokens reduced to the ones that can actually attest agreement.
+    public static func meaningfulTokens(_ key: String) -> Set<String> {
+        Set(key.split(separator: " ").map(String.init).filter { token in
+            token.count >= 2 && !token.allSatisfy(\.isNumber) && !weakTokens.contains(token)
+        })
+    }
+
     /// All (titleKey, authorTokens) readings of a filename stem: the full
     /// normalized stem, plus both orders of a two-part " - " split.
     static func stemCandidates(_ rawStem: String) -> [StemCandidate] {
         let full = Normalizer.normalizeFilenameStem(rawStem)
-        guard !full.isEmpty else { return [] }
+        guard isViableTitleKey(full) else { return [] }
         var candidates = [StemCandidate(titleKey: full, authorTokens: [])]
 
         let spaced = rawStem.replacingOccurrences(of: "_", with: " ")
@@ -207,12 +231,12 @@ public final class GroupingEngine: @unchecked Sendable {
         if parts.count == 2 {
             let key0 = Normalizer.normalizeFilenameStem(parts[0])
             let key1 = Normalizer.normalizeFilenameStem(parts[1])
-            let tokens0 = Set(key0.split(separator: " ").map(String.init))
-            let tokens1 = Set(key1.split(separator: " ").map(String.init))
-            if !key0.isEmpty && !tokens1.isEmpty {
+            let tokens0 = meaningfulTokens(key0)
+            let tokens1 = meaningfulTokens(key1)
+            if isViableTitleKey(key0) && !tokens1.isEmpty {
                 candidates.append(StemCandidate(titleKey: key0, authorTokens: tokens1))
             }
-            if !key1.isEmpty && !tokens0.isEmpty {
+            if isViableTitleKey(key1) && !tokens0.isEmpty {
                 candidates.append(StemCandidate(titleKey: key1, authorTokens: tokens0))
             }
         }

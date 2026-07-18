@@ -46,6 +46,12 @@ struct BookShelfApp: App {
                 }
                 .disabled(model.items.isEmpty || model.isScanning)
 
+                Button("Rebuild Auto-Groups") {
+                    Task { await model.rebuildGroups() }
+                }
+                .disabled(model.items.isEmpty || model.isScanning)
+                .help("Re-runs grouping with the current rules. Manual merges and splits are preserved.")
+
                 Divider()
 
                 Menu("Export") {

@@ -2,6 +2,46 @@ import Foundation
 import GRDB
 import BookShelfKit
 
+func groupingRegressionTests(_ runner: TestRunner) async {
+    await runner.run("collection files sharing ' - 2007)' suffix never group") {
+        let engine = GroupingEngine()
+        let a = GroupingSeed(rawStem: "The 5 Paths to Persuasion (Robert B. Miller, Gary A. Williams etc. - 2007)")
+        let bookA = try await inMemoryAssign(engine, a)
+        _ = bookA
+
+        let b = GroupingSeed(rawStem: "The 4-Hour Workweek (Timothy Ferriss, Michael Porter etc. - 2007)")
+        expectEqual(engine.decide(b), .createNew,
+                    "a shared year token must not glue different titles together")
+
+        let c = GroupingSeed(rawStem: "On Writing Well (William Zinsser - 2007)")
+        expectEqual(engine.decide(c), .createNew)
+
+        // The legitimate case still works: same title, author agreement.
+        let d = GroupingSeed(rawStem: "The 5 Paths to Persuasion (Robert B. Miller, Gary A. Williams etc. - 2007)")
+        if case .join = engine.decide(d) {} else {
+            expect(false, "identical stem must still join")
+        }
+    }
+
+    await runner.run("numeric and stopword-only title keys are not viable") {
+        expect(!GroupingEngine.isViableTitleKey("2007"), "bare year")
+        expect(!GroupingEngine.isViableTitleKey("the"), "stopword")
+        expect(!GroupingEngine.isViableTitleKey("1 2 3"), "numbers only")
+        expect(GroupingEngine.isViableTitleKey("dune"), "real word")
+        expect(GroupingEngine.isViableTitleKey("1984 orwell"), "year plus word ok")
+        expectEqual(GroupingEngine.meaningfulTokens("the 2007 etc herbert"), ["herbert"])
+    }
+}
+
+/// Runs assignBook against a throwaway database so decide/register state
+/// mirrors a real scan.
+private func inMemoryAssign(_ engine: GroupingEngine, _ seed: GroupingSeed) async throws -> Int64 {
+    let db = try AppDatabase.inMemory()
+    return try await db.writer.write { db in
+        try engine.assignBook(db, seed: seed)
+    }
+}
+
 private func touch(_ dir: URL, _ name: String) throws {
     let url = dir.appendingPathComponent(name)
     try "x".data(using: .utf8)!.write(to: url)
