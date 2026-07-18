@@ -26,5 +26,19 @@ struct BookShelfApp: App {
                 .environment(model)
                 .frame(minWidth: 760, minHeight: 480)
         }
+        .commands {
+            CommandGroup(after: .undoRedo) {
+                Button("Undo Last Rename Batch") {
+                    Task { await model.undoLastRename() }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(model.undoableBatch == nil)
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(model)
+        }
     }
 }

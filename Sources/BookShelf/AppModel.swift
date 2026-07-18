@@ -82,6 +82,11 @@ final class AppModel {
         let candidates: [LookupCandidate]
     }
 
+    // Rename (FR-4)
+    var renamePlan: [RenamePlanItem]?
+    private(set) var undoableBatch: (batchId: String, count: Int)?
+    private(set) var lastRenameSummary: String?
+
     private var observationTask: Task<Void, Never>?
 
     init(database: AppDatabase? = nil) throws {
@@ -92,6 +97,7 @@ final class AppModel {
             self.viewMode = mode
         }
         startObservation()
+        Task { await refreshUndoState() }
     }
 
     // MARK: - Live query
@@ -146,7 +152,7 @@ final class AppModel {
         scanProgress = ScanProgress(phase: .enumerating, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
         do {
-            let result = try await pipeline.scan(root: root) { progress in
+            let result = try await pipeline.scan(root: root, ignoredExtensions: ignoredExtensions) { progress in
                 Task { @MainActor [weak self] in
                     self?.scanProgress = progress
                 }
@@ -494,6 +500,74 @@ final class AppModel {
             } catch {
                 errorMessage = "Replacing cover failed: \(error.localizedDescription)"
             }
+        }
+    }
+
+    // MARK: - Settings access
+
+    func settingValue(_ key: String, default defaultValue: String = "") -> String {
+        ((try? database.setting(key)) ?? nil) ?? defaultValue
+    }
+
+    func setSettingValue(_ key: String, _ value: String) {
+        try? database.setSetting(key, value.isEmpty ? nil : value)
+    }
+
+    var renameTemplateRaw: String {
+        settingValue("renameTemplate", default: RenameTemplate.defaultRaw)
+    }
+
+    var ignoredExtensions: Set<String> {
+        Set(settingValue("ignoreList")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty })
+    }
+
+    // MARK: - Rename (FR-4)
+
+    /// Builds the plan and opens the mandatory preview sheet (FR-4.6).
+    func prepareRename(ids: [Int64]) {
+        do {
+            let template = try RenameTemplate.parse(renameTemplateRaw)
+            let chosen = items.filter { ids.contains($0.id) }
+            let plan = RenamePlanner.plan(
+                items: chosen.map { ($0.book, $0.files) },
+                template: template)
+            guard !plan.isEmpty else { return }
+            renamePlan = plan
+        } catch {
+            errorMessage = "Rename template is invalid: \(error)"
+        }
+    }
+
+    func executeRename() async {
+        guard let plan = renamePlan else { return }
+        renamePlan = nil
+        do {
+            let result = try await RenameExecutor.execute(plan: plan, database: database)
+            var parts = ["\(result.renamed) renamed"]
+            if result.skipped > 0 { parts.append("\(result.skipped) skipped") }
+            if !result.failures.isEmpty { parts.append("\(result.failures.count) failed") }
+            lastRenameSummary = parts.joined(separator: " · ")
+            await refreshUndoState()
+        } catch {
+            errorMessage = "Rename failed: \(error.localizedDescription)"
+        }
+    }
+
+    func refreshUndoState() async {
+        undoableBatch = try? await RenameExecutor.lastUndoableBatch(database: database)
+            .map { ($0.batchId, $0.entries) }
+    }
+
+    func undoLastRename() async {
+        do {
+            let restored = try await RenameExecutor.undoLastBatch(database: database)
+            lastRenameSummary = "Undo restored \(restored) file\(restored == 1 ? "" : "s")"
+            await refreshUndoState()
+        } catch {
+            errorMessage = "Undo failed: \(error.localizedDescription)"
         }
     }
 

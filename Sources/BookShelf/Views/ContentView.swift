@@ -33,11 +33,25 @@ struct ContentView: View {
         .sheet(item: $model.pendingPicker) { request in
             CandidatePickerSheet(request: request)
         }
+        .sheet(isPresented: renameSheetBinding) {
+            if let plan = model.renamePlan {
+                RenamePreviewSheet(plan: plan)
+            }
+        }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK") { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+
+    @MainActor
+    private var renameSheetBinding: Binding<Bool> {
+        let model = self.model
+        return Binding(
+            get: { model.renamePlan != nil },
+            set: { if !$0 { model.renamePlan = nil } }
+        )
     }
 
     @MainActor
@@ -59,7 +73,19 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            if let summary = model.lastRenameSummary {
+                Text("· \(summary)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
+            if let undo = model.undoableBatch {
+                Button("Undo Rename (\(undo.count))") {
+                    Task { await model.undoLastRename() }
+                }
+                .controlSize(.small)
+                .help("Restore the previous names of the last rename batch")
+            }
             if let progress = model.resolveProgress {
                 HStack(spacing: 6) {
                     ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
@@ -168,6 +194,17 @@ struct ContentView: View {
             }
             .disabled(model.unresolvedBookIds.isEmpty || model.isResolving)
             .help("Fetch metadata and covers online for all incomplete books")
+
+            Button {
+                let ids = model.selection.isEmpty
+                    ? model.displayedItems.map(\.id)
+                    : Array(model.selection)
+                model.prepareRename(ids: ids)
+            } label: {
+                Label("Rename…", systemImage: "character.cursor.ibeam")
+            }
+            .disabled(model.items.isEmpty)
+            .help("Preview and rename the selection (or all shown books) to your template")
 
             filterMenu
             sortMenu
