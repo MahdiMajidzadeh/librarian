@@ -23,5 +23,6 @@ await epubParserTests(runner)
 await pdfParserTests(runner)
 await mobiParserTests(runner)
 await lookupTests(runner)
+await renameTests(runner)
 
 runner.finish()
