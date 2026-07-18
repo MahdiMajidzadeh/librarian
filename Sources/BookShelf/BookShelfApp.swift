@@ -48,6 +48,25 @@ struct BookShelfApp: App {
 
                 Divider()
 
+                Menu("Export") {
+                    Button("JSON…") {
+                        Task { await model.export(.json(includeCovers: false)) }
+                    }
+                    Button("JSON with Covers…") {
+                        Task { await model.export(.json(includeCovers: true)) }
+                    }
+                    Divider()
+                    Button("CSV…") {
+                        Task { await model.export(.csv()) }
+                    }
+                    Button("CSV — One Row per File…") {
+                        Task { await model.export(.csv(mode: .perFile)) }
+                    }
+                }
+                .disabled(model.items.isEmpty)
+
+                Divider()
+
                 Button("Purge Missing Files") {
                     Task { await model.purgeMissing() }
                 }
