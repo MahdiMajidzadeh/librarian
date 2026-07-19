@@ -94,7 +94,7 @@ func endToEndTests(_ runner: TestRunner) async {
         }).count, TagSanitizer.maxTagCount, "count capped")
     }
 
-    await runner.run("pipeline: prose PDF keywords become sane tags, re-extract repairs old rows") {
+    await runner.run("pipeline: embedded keywords never become tags, re-extract clears old ones") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")
             try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
@@ -108,30 +108,42 @@ func endToEndTests(_ runner: TestRunner) async {
             _ = try await pipeline.scan(root: library)
 
             var book = try await database.writer.read { try Book.fetchOne($0) }
-            expectEqual(book?.tags ?? [], ["product strategy", "career goals", "roadmaps"],
-                        "prose fragment dropped, real keywords kept")
+            expectEqual(book?.tags ?? [], [],
+                        "embedded keywords must not be applied as tags")
 
-            // Simulate a pre-fix database row full of prose tags.
+            // Simulate a row from an older version that stored embedded tags.
             try await database.writer.write { db in
                 var b = try Book.fetchOne(db)!
-                b.tags = ["a paragraph-length tag that clearly is not a keyword at all, truly", "sf"]
+                b.tags = ["product strategy", "career goals"]
                 try b.update(db)
+                try ProvenanceRecord(bookId: b.id!, field: "tags", source: .embedded).save(db)
             }
             _ = try await pipeline.reextractEmbedded()
             book = try await database.writer.read { try Book.fetchOne($0) }
-            expectEqual(book?.tags ?? [], ["product strategy", "career goals", "roadmaps"],
-                        "re-extract must replace invalid stored tags")
+            expectEqual(book?.tags ?? [], [], "re-extract must clear embedded-sourced tags")
+            let provenance = try database.provenance(forBook: book!.id!)
+            expectNil(provenance["tags"], "cleared tags leave no stale provenance")
 
-            // Manual tags are never touched, even when invalid-looking.
+            // Online and manual tags are untouched by re-extract.
             try await database.writer.write { db in
                 var b = try Book.fetchOne(db)!
-                b.tags = ["my very own extremely long personal tag that i typed on purpose ok"]
+                b.tags = ["sf", "classic"]
+                try b.update(db)
+                try ProvenanceRecord(bookId: b.id!, field: "tags", source: .openLibrary).save(db)
+            }
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.tags ?? [], ["sf", "classic"], "online tags must survive")
+
+            try await database.writer.write { db in
+                var b = try Book.fetchOne(db)!
+                b.tags = ["my very own tag"]
                 try b.update(db)
                 try ProvenanceRecord(bookId: b.id!, field: "tags", source: .manual).save(db)
             }
             _ = try await pipeline.reextractEmbedded()
             book = try await database.writer.read { try Book.fetchOne($0) }
-            expectEqual(book?.tags.count, 1, "manual tags must survive re-extract")
+            expectEqual(book?.tags ?? [], ["my very own tag"], "manual tags must survive")
         }
     }
 

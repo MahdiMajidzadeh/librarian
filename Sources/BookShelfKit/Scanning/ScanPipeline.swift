@@ -109,17 +109,17 @@ public final class ScanPipeline: Sendable {
                 if isbn.count == 13 { book.isbn13 = isbn } else { book.isbn10 = isbn }
                 touchedFields.append("isbn")
             }
-            // Tags: sanitize incoming keywords, and also repair previously
-            // stored prose-tags (unless the user set them manually).
-            let incomingTags = TagSanitizer.sanitize(meta.subjects)
-            let tagsAreManual = (try? provenanceSource(db, bookId: bookId, field: "tags")) == .manual
-            if !tagsAreManual {
-                if !incomingTags.isEmpty, book.tags.isEmpty || !TagSanitizer.isValid(book.tags) {
-                    book.tags = incomingTags
-                    touchedFields.append("tags")
-                } else if !TagSanitizer.isValid(book.tags) {
-                    book.tags = TagSanitizer.sanitize(book.tags)
-                }
+            // Tags: embedded keyword fields (PDF "Keywords", dc:subject,
+            // EXTH 105) are too noisy to trust, so they are never applied —
+            // tags come only from online lookup or manual edits. Rows that
+            // still carry embedded tags from older versions are cleared here.
+            let tagSource = (try? provenanceSource(db, bookId: bookId, field: "tags")) ?? nil
+            if tagSource == .embedded {
+                book.tags = []
+                try ProvenanceRecord
+                    .filter(ProvenanceRecord.Columns.bookId == bookId)
+                    .filter(ProvenanceRecord.Columns.field == "tags")
+                    .deleteAll(db)
             }
             // Cover quality ranking: a real embedded cover (epub/mobi/azw3)
             // replaces a PDF first-page render, never the other way round.

@@ -113,6 +113,9 @@ Sources/BookShelfTests/ TestHarness.swift + one *Tests.swift per subsystem
   cache keys include mtime for that reason.
 - Cover quality is ranked (`ScanPipeline.coverRank`): epub/mobi/azw3 embedded
   covers replace PDF first-page renders, never the reverse.
+- **Tags never come from embedded metadata** (PDF Keywords / dc:subject /
+  EXTH are junk-prone): only online lookup and manual edits set tags;
+  scan/re-extract clear embedded-sourced tags from old rows.
 - Parse failures are non-fatal: book stays visible with
   `metadataStatus = .unresolved` + `parseErrorNote`.
 - Commit style: conventional commits (`feat(scope):`, `fix(ui):`, `chore:`),

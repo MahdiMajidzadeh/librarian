@@ -61,6 +61,14 @@ unchanged files, existing libraries are also swept once at launch by the
 **v3 migration** (`AppDatabase.repairJunkEmbeddedTitles`, idempotent) so the
 user never has to trigger re-extract manually.
 
+**Exception — tags never come from embedded metadata.** Embedded keyword
+fields (PDF "Keywords", epub `dc:subject`, MOBI EXTH 105) are too noisy to
+trust, so `applyEmbedded` skips them entirely; tags come only from online
+lookup (`TagSanitizer.sanitize`d categories) or manual edits. Scan and
+re-extract also *clear* embedded-sourced tags (and their provenance row)
+left over from older versions. Parsers still extract `subjects` into
+`EmbeddedMetadata` — the data is just never applied.
+
 ## Online lookup (`Lookup/`)
 
 `MetadataProvider` protocol with two implementations: `OpenLibraryProvider`
