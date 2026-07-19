@@ -101,7 +101,30 @@ public enum RenamePlanner {
                         return true
                     }
                     let candidatePath = directory + "/" + name
-                    return candidatePath != file.path && fileExists(candidatePath)
+                    // Case-insensitive self-comparison: on APFS (default
+                    // case-insensitive) a case-only rename finds itself via
+                    // fileExists and must not count as a collision.
+                    if candidatePath.compare(file.path, options: .caseInsensitive) == .orderedSame {
+                        return false
+                    }
+                    return fileExists(candidatePath)
+                }
+
+                // The collision suffix can push a name already at the
+                // 255-byte APFS cap over the limit; shorten the stem so the
+                // move stays executable (truncation is grapheme-safe).
+                func suffixed(stem: String, suffix: String) -> String {
+                    let budget = 255 - suffix.utf8.count
+                    guard stem.utf8.count > budget else { return stem + suffix }
+                    var truncated = ""
+                    var used = 0
+                    for ch in stem {
+                        let size = String(ch).utf8.count
+                        if used + size > budget { break }
+                        truncated.append(ch)
+                        used += size
+                    }
+                    return truncated + suffix
                 }
 
                 var finalName = baseName
@@ -112,9 +135,9 @@ public enum RenamePlanner {
                     let url = URL(fileURLWithPath: baseName)
                     let stem = url.deletingPathExtension().lastPathComponent
                     let ext = url.pathExtension
-                    finalName = ext.isEmpty
-                        ? "\(stem) (\(counter))"
-                        : "\(stem) (\(counter)).\(ext)"
+                    finalName = suffixed(
+                        stem: stem,
+                        suffix: ext.isEmpty ? " (\(counter))" : " (\(counter)).\(ext)")
                     counter += 1
                 }
                 claimed[directory, default: []].insert(finalName.lowercased())

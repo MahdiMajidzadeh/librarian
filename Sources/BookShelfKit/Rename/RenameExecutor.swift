@@ -38,12 +38,21 @@ public enum RenameExecutor {
                     // back with no journal entry.
                     try FileManager.default.moveItem(
                         atPath: item.currentPath, toPath: newPath)
-                    file.path = newPath
-                    try file.update(db)
-                    var entry = RenameLogEntry(
-                        batchId: batchId, fileId: item.id,
-                        oldPath: item.currentPath, newPath: newPath)
-                    try entry.insert(db)
+                    do {
+                        file.path = newPath
+                        try file.update(db)
+                        var entry = RenameLogEntry(
+                            batchId: batchId, fileId: item.id,
+                            oldPath: item.currentPath, newPath: newPath)
+                        try entry.insert(db)
+                    } catch {
+                        // The DB write failed after the move succeeded: the
+                        // transaction rolls back with no journal entry, so
+                        // put the file back to keep disk and DB consistent.
+                        try? FileManager.default.moveItem(
+                            atPath: newPath, toPath: item.currentPath)
+                        throw error
+                    }
                 }
                 result.renamed += 1
             } catch {
@@ -91,12 +100,20 @@ public enum RenameExecutor {
                     var entry = entry
                     try FileManager.default.moveItem(
                         atPath: entry.newPath, toPath: entry.oldPath)
-                    if var file = try BookFile.fetchOne(db, key: entry.fileId) {
-                        file.path = entry.oldPath
-                        try file.update(db)
+                    do {
+                        if var file = try BookFile.fetchOne(db, key: entry.fileId) {
+                            file.path = entry.oldPath
+                            try file.update(db)
+                        }
+                        entry.revertedFlag = true
+                        try entry.update(db)
+                    } catch {
+                        // Roll the disk back too, so a retried undo still
+                        // finds the file at newPath.
+                        try? FileManager.default.moveItem(
+                            atPath: entry.oldPath, toPath: entry.newPath)
+                        throw error
                     }
-                    entry.revertedFlag = true
-                    try entry.update(db)
                 }
                 restored += 1
             } catch {

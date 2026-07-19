@@ -121,6 +121,26 @@ func renameTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("planner: case-only rename is not a collision") {
+        try await withTempDirectory { dir in
+            // On case-insensitive APFS the target "exists" — it's the file
+            // itself, so no "(2)" suffix may be added.
+            try "x".data(using: .utf8)!.write(to: dir.appendingPathComponent("frank herbert - dune.epub"))
+
+            var book = dune
+            book.id = 7
+            let files = [BookFile(id: 1, bookId: 7,
+                                  path: dir.appendingPathComponent("frank herbert - dune.epub").path,
+                                  format: .epub, sizeBytes: 1, modifiedAt: Date())]
+            let template = try RenameTemplate.parse(RenameTemplate.defaultRaw)
+            let plan = RenamePlanner.plan(items: [(book, files)], template: template)
+
+            expectEqual(plan[0].proposedName, "Frank Herbert - Dune.epub",
+                        "capitalization fix must not get a (2) suffix")
+            expectEqual(plan[0].status, .ready)
+        }
+    }
+
     await runner.run("executor: renames, updates database, journals, and undoes fully") {
         try await withTempDirectory { dir in
             let database = try AppDatabase.inMemory()
