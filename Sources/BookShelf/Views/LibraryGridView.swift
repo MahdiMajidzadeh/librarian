@@ -125,6 +125,10 @@ struct CoverView: View {
                 Rectangle().fill(placeholderColor.gradient)
                 Text(String(title.prefix(1)).uppercased())
                     .font(.system(size: 48, weight: .semibold, design: .serif))
+                    // Lets the letter shrink when the view renders at thumbnail
+                    // size (e.g. the 44×64 cover in CandidatePickerSheet).
+                    .minimumScaleFactor(0.25)
+                    .padding(4)
                     .foregroundStyle(.white.opacity(0.9))
             }
         }

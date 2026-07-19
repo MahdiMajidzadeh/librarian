@@ -252,9 +252,16 @@ public final class LookupService: Sendable {
 
     /// Resolves a set of books, checkpointing remaining ids to the settings
     /// table after each book so an interrupted batch can resume.
+    ///
+    /// `reviewCompleted` controls what happens to books that are already
+    /// `.complete`: with `false` a clear winner is auto-applied (which is a
+    /// no-op under fill-empty — every field is taken), with `true` their
+    /// candidates always go through the picker so the user can re-resolve a
+    /// book to a different edition as often as they like.
     public func resolveBatch(
         bookIds: [Int64],
         policy: ApplyPolicy,
+        reviewCompleted: Bool = false,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> LookupOutcome {
         var outcome = LookupOutcome()
@@ -276,6 +283,8 @@ public final class LookupService: Sendable {
                 let viable = results.filter { $0.similarity >= Self.similarityFloor }
                 if viable.isEmpty {
                     outcome.noMatch.append(bookId)
+                } else if reviewCompleted, book.metadataStatus == .complete {
+                    outcome.ambiguous[bookId] = viable
                 } else if let best = Self.unambiguousBest(viable) {
                     try await apply(best, to: bookId, policy: policy)
                     outcome.resolved.append(bookId)

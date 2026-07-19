@@ -233,6 +233,36 @@ func lookupTests(_ runner: TestRunner) async {
         expectEqual(service.pendingBatch(), [])
     }
 
+    await runner.run("reviewCompleted routes complete books to the picker") {
+        let database = try AppDatabase.inMemory()
+        let (completeId, incompleteId) = try await database.writer.write { db -> (Int64, Int64) in
+            var complete = Book(title: "Dune", authors: ["Frank Herbert"],
+                                year: 1965, metadataStatus: .complete)
+            try complete.insert(db)
+            var incomplete = Book(title: "Dune", authors: [])
+            try incomplete.insert(db)
+            return (complete.id!, incomplete.id!)
+        }
+        let stub = TransportStub()
+        stub.handler = { _ in (Data(openLibraryDuneJSON.utf8), 200) }
+        let (service, _, _) = try makeService(stub, db: database)
+
+        // Explicit re-resolve: the complete book must come back for review
+        // even though "Dune" is a clear winner; the incomplete one still
+        // auto-applies as before.
+        let outcome = await service.resolveBatch(
+            bookIds: [completeId, incompleteId], policy: .fillEmpty, reviewCompleted: true)
+        expectNotNil(outcome.ambiguous[completeId],
+                     "complete book goes to the picker under reviewCompleted")
+        expectEqual(outcome.resolved, [incompleteId])
+
+        // Default (background/resume) behavior is unchanged: clear winners
+        // auto-apply without a picker.
+        let silent = await service.resolveBatch(bookIds: [completeId], policy: .fillEmpty)
+        expectEqual(silent.ambiguous.count, 0)
+        expectEqual(silent.resolved, [completeId])
+    }
+
     await runner.run("query built from filename when book has no metadata") {
         let book = Book(title: "", authors: [])
         let file = BookFile(bookId: 1, path: "/books/Frank Herbert - Dune.epub",

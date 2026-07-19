@@ -9,7 +9,6 @@ struct BookDetailView: View {
     let item: BookListItem
 
     @State private var provenance: [String: ProvenanceSource] = [:]
-    @State private var showEditSheet = false
 
     var body: some View {
         ScrollView {
@@ -39,9 +38,6 @@ struct BookDetailView: View {
         .task(id: item.book.updatedAt) {
             provenance = model.provenance(for: item.id)
         }
-        .sheet(isPresented: $showEditSheet) {
-            BookEditSheet(item: item)
-        }
     }
 
     private var actionRow: some View {
@@ -55,7 +51,9 @@ struct BookDetailView: View {
             .help("Look up metadata and cover on Open Library / Google Books")
 
             Button {
-                showEditSheet = true
+                // Presented from ContentView: sheets attached inside the
+                // inspector don't reliably appear on macOS 14.
+                model.editingItem = item
             } label: {
                 Label("Edit…", systemImage: "pencil")
             }

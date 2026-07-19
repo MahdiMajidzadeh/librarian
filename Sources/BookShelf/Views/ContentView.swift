@@ -36,6 +36,9 @@ struct ContentView: View {
         .sheet(item: $model.pendingPicker) { request in
             CandidatePickerSheet(request: request)
         }
+        .sheet(item: $model.editingItem) { item in
+            BookEditSheet(item: item)
+        }
         .sheet(isPresented: renameSheetBinding) {
             if let plan = model.renamePlan {
                 RenamePreviewSheet(plan: plan)

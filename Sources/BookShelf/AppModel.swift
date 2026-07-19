@@ -82,6 +82,12 @@ final class AppModel {
         let candidates: [LookupCandidate]
     }
 
+    // Manual edit sheet (FR-3.7). Lives here, not as view-local state: the
+    // detail pane sits inside an `.inspector`, and sheets presented from
+    // inspector content don't reliably appear on macOS 14 — ContentView
+    // presents this at window level instead.
+    var editingItem: BookListItem?
+
     // Rename (FR-4)
     var renamePlan: [RenamePlanItem]?
     private(set) var undoableBatch: (batchId: String, count: Int)?
@@ -501,7 +507,12 @@ final class AppModel {
         resolveGeneration += 1
         let generation = resolveGeneration
         resolveProgress = (0, ids.count)
-        let outcome = await service.resolveBatch(bookIds: ids, policy: applyPolicy) { done, total in
+        // reviewCompleted: resolving an already-complete book is always an
+        // explicit user action to change it, so it goes through the picker
+        // again instead of silently no-op'ing (fill-empty has nothing to fill).
+        let outcome = await service.resolveBatch(
+            bookIds: ids, policy: applyPolicy, reviewCompleted: true
+        ) { done, total in
             Task { @MainActor [weak self] in
                 guard let self, self.resolveGeneration == generation else { return }
                 self.resolveProgress = (done, total)
@@ -536,7 +547,11 @@ final class AppModel {
 
     func applyCandidate(_ candidate: LookupCandidate, to bookId: Int64) async {
         do {
-            try await makeLookupService().apply(candidate, to: bookId, policy: applyPolicy)
+            // The user explicitly chose this edition in the picker, so it
+            // replaces earlier embedded/online values regardless of the
+            // fill-empty setting — otherwise re-resolving a complete book
+            // could never change anything. Manual edits still win (FR-3.7).
+            try await makeLookupService().apply(candidate, to: bookId, policy: .overwrite)
         } catch {
             errorMessage = "Applying metadata failed: \(error.localizedDescription)"
         }
