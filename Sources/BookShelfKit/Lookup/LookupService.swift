@@ -12,13 +12,17 @@ actor RateLimiter {
     }
 
     func waitTurn() async {
-        if let last = lastRequest {
-            let elapsed = clock.now - last
-            if elapsed < minInterval {
-                try? await clock.sleep(for: minInterval - elapsed)
-            }
+        // Reserve the slot before sleeping: actor reentrancy lets another
+        // caller enter during the sleep, and it must queue after this one
+        // rather than read the same stale lastRequest.
+        let slot: ContinuousClock.Instant
+        if let last = lastRequest, last + minInterval > clock.now {
+            slot = last + minInterval
+        } else {
+            slot = clock.now
         }
-        lastRequest = clock.now
+        lastRequest = slot
+        try? await clock.sleep(until: slot)
     }
 }
 
@@ -70,8 +74,8 @@ public final class LookupService: Sendable {
         self.maxAttempts = maxAttempts
     }
 
-    /// Standard provider stack per settings: Open Library always; Google
-    /// Books first when the user supplied an API key and prefers it.
+    /// Standard provider stack: Open Library is primary (keyless); Google
+    /// Books is consulted as a fallback when the user supplied an API key.
     public static func standardProviders(googleAPIKey: String?) -> [any MetadataProvider] {
         var providers: [any MetadataProvider] = [OpenLibraryProvider()]
         if let key = googleAPIKey, !key.isEmpty {
@@ -87,9 +91,11 @@ public final class LookupService: Sendable {
     public func candidates(for query: LookupQuery) async throws -> [LookupCandidate] {
         guard !query.isEmpty else { return [] }
         var lastError: Error?
+        var anySucceeded = false
         for provider in providers {
             do {
                 let results = try await searchWithRetry(provider: provider, query: query)
+                anySucceeded = true
                 if !results.isEmpty {
                     return score(results, against: query)
                 }
@@ -97,7 +103,9 @@ public final class LookupService: Sendable {
                 lastError = error
             }
         }
-        if let lastError { throw lastError }
+        // A provider that answered with zero hits is a genuine no-match;
+        // don't let a later provider's failure turn it into an error.
+        if !anySucceeded, let lastError { throw lastError }
         return []
     }
 
