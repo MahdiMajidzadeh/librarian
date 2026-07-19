@@ -45,6 +45,22 @@ auditable in the detail view. `metadataStatus` is derived: `complete` needs
 title + author + year + cover; `partial` some fields; `unresolved` nothing
 beyond the filename.
 
+**Exception — junk embedded titles are dropped at extraction.** Publishers
+routinely stamp the source filename or bare ISBN into a file's Title field
+("0071501126.pdf"), which would otherwise beat the far better filename-derived
+title. `MetadataExtractor` nils any title `EmbeddedMetadata.isJunkTitle`
+flags — filename-shaped (known extension suffix), bare/long numbers (short
+numeric titles like "1984" survive), authoring-tool artifacts ("Microsoft
+Word - …"), "untitled" — before anyone consumes it (grouping seeds included),
+and salvages a valid ISBN found inside the junk into `meta.isbn`.
+`ScanPipeline.applyEmbedded` additionally repairs old rows: a book whose
+title has *embedded* provenance and still looks junk is reset to the
+filename-inferred title (provenance row deleted) on scan/re-extract; manual
+and online titles are never touched. Because incremental rescans *skip*
+unchanged files, existing libraries are also swept once at launch by the
+**v3 migration** (`AppDatabase.repairJunkEmbeddedTitles`, idempotent) so the
+user never has to trigger re-extract manually.
+
 ## Online lookup (`Lookup/`)
 
 `MetadataProvider` protocol with two implementations: `OpenLibraryProvider`

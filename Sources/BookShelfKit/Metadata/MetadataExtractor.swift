@@ -18,7 +18,7 @@ public enum MetadataExtractor {
             default:
                 return nil
             }
-            return .success(meta)
+            return .success(dropJunkTitle(meta))
         } catch let error as ParseError {
             return .failure(error)
         } catch {
@@ -26,4 +26,17 @@ public enum MetadataExtractor {
         }
     }
 
+    /// Publishers routinely stamp the source filename or bare ISBN into the
+    /// Title field ("0071501126.pdf"). Such a title must never beat the
+    /// filename-derived one, so it is dropped here — but when it embeds a
+    /// valid ISBN, that identifier is salvaged for grouping and lookup.
+    private static func dropJunkTitle(_ meta: EmbeddedMetadata) -> EmbeddedMetadata {
+        guard let title = meta.title, EmbeddedMetadata.isJunkTitle(title) else { return meta }
+        var cleaned = meta
+        cleaned.title = nil
+        if cleaned.isbn == nil, let isbn = Normalizer.extractISBN(title) {
+            cleaned.isbn = isbn
+        }
+        return cleaned
+    }
 }

@@ -36,6 +36,42 @@ public struct EmbeddedMetadata: Sendable, Equatable {
         return fields
     }
 
+    /// File extensions that betray a Title field stuffed with a filename
+    /// ("0071501126.pdf", "Microsoft Word - thesis.doc").
+    static let junkTitleExtensions: Set<String> = [
+        "pdf", "epub", "mobi", "azw", "azw3", "djvu", "doc", "docx", "rtf",
+        "txt", "html", "htm", "tex", "indd", "qxd", "pmd", "p65", "fb2",
+        "cbz", "chm", "ps", "odt",
+    ]
+
+    /// True when an embedded title is production junk rather than a real
+    /// title: a filename ("0071501126.pdf"), a bare ISBN / long number, an
+    /// authoring-tool artifact ("Microsoft Word - chapter1"), or "untitled".
+    /// Checks are script-agnostic — real Unicode titles (Persian included)
+    /// and short numeric titles like "1984" are never flagged.
+    public static func isJunkTitle(_ raw: String) -> Bool {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        if text.isEmpty { return true }
+
+        let lowered = text.lowercased()
+        if ["untitled", "unknown", "no title"].contains(lowered) { return true }
+        for prefix in ["microsoft word - ", "microsoft powerpoint - ", "powerpoint presentation"]
+        where lowered.hasPrefix(prefix) { return true }
+
+        if let dot = lowered.lastIndex(of: "."),
+           junkTitleExtensions.contains(String(lowered[lowered.index(after: dot)...])) {
+            return true
+        }
+
+        // No letters in any script: pure punctuation is junk; digit runs are
+        // junk only at ISBN-ish length so "1984" or "2001" survive.
+        if !text.contains(where: \.isLetter) {
+            let digitCount = text.filter(\.isNumber).count
+            return digitCount == 0 || digitCount >= 8
+        }
+        return false
+    }
+
     /// Parses a year out of strings like "1965", "1965-08-01", "August 1965".
     public static func year(fromDateString raw: String) -> Int? {
         var digits = ""

@@ -91,6 +91,63 @@ func databaseTests(_ runner: TestRunner) async {
         expectEqual(map.count, 2)
     }
 
+    await runner.run("repair junk embedded titles: re-derive from filename, keep manual and online") {
+        let db = try AppDatabase.inMemory()
+        // A book cataloged by an older version: junk embedded title, ISBN
+        // waiting to be salvaged from it, real title in the filename.
+        let junkId = try await db.writer.write { db -> Int64 in
+            var b = Book(title: "0071501126.pdf")
+            b.titleSort = Book.sortKey(forTitle: b.title)
+            try b.insert(db)
+            var f = BookFile(bookId: b.id!,
+                             path: "/books/What_Customers_Want_Using_Outcome_Driven_Innovation.pdf",
+                             format: .pdf, sizeBytes: 10, modifiedAt: Date())
+            try f.insert(db)
+            try ProvenanceRecord(bookId: b.id!, field: "title", source: .embedded).save(db)
+            return b.id!
+        }
+        // A manual title that happens to look junk must never be touched.
+        let manualId = try await db.writer.write { db -> Int64 in
+            var b = Book(title: "untitled.pdf")
+            try b.insert(db)
+            var f = BookFile(bookId: b.id!, path: "/books/real.pdf",
+                             format: .pdf, sizeBytes: 10, modifiedAt: Date())
+            try f.insert(db)
+            try ProvenanceRecord(bookId: b.id!, field: "title", source: .manual).save(db)
+            return b.id!
+        }
+        // A genuine embedded title must survive.
+        let goodId = try await db.writer.write { db -> Int64 in
+            var b = Book(title: "Dune")
+            try b.insert(db)
+            var f = BookFile(bookId: b.id!, path: "/books/dune.pdf",
+                             format: .pdf, sizeBytes: 10, modifiedAt: Date())
+            try f.insert(db)
+            try ProvenanceRecord(bookId: b.id!, field: "title", source: .embedded).save(db)
+            return b.id!
+        }
+
+        let repaired = try await db.writer.write { try AppDatabase.repairJunkEmbeddedTitles($0) }
+        expectEqual(repaired, 1, "only the junk embedded row is repaired")
+
+        let junk = try await db.writer.read { try Book.fetchOne($0, key: junkId)! }
+        expectEqual(junk.title, "What Customers Want Using Outcome Driven Innovation",
+                    "title re-derived from the filename")
+        expectEqual(junk.isbn10, "0071501126", "ISBN salvaged from the junk title")
+        expectNil(try db.provenance(forBook: junkId)["title"],
+                  "stale embedded-title provenance is dropped")
+
+        let manual = try await db.writer.read { try Book.fetchOne($0, key: manualId)! }
+        expectEqual(manual.title, "untitled.pdf", "manual titles are never repaired")
+
+        let good = try await db.writer.read { try Book.fetchOne($0, key: goodId)! }
+        expectEqual(good.title, "Dune", "real embedded titles survive")
+
+        // Idempotent: a second pass changes nothing.
+        let again = try await db.writer.write { try AppDatabase.repairJunkEmbeddedTitles($0) }
+        expectEqual(again, 0, "repair is idempotent")
+    }
+
     await runner.run("settings store and delete") {
         let db = try AppDatabase.inMemory()
         try db.setSetting("renameTemplate", "{author} - {title}.{ext}")

@@ -264,6 +264,55 @@ func endToEndTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("pipeline: junk embedded title loses to filename, re-extract repairs old rows") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            // Publisher stamped the ISBN filename into the PDF Title field.
+            try Fixtures.makePDF(
+                at: library.appendingPathComponent(
+                    "What_Customers_Want_Using_Outcome_Driven_Innovation - Anthony Ulwick.pdf"),
+                title: "0071501126.pdf")
+            _ = try await pipeline.scan(root: library)
+
+            var book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.title, "What Customers Want Using Outcome Driven Innovation",
+                        "junk embedded title must lose to the filename-derived one")
+            expectEqual(book?.isbn10, "0071501126",
+                        "ISBN salvaged from the junk title feeds grouping and lookup")
+
+            // Simulate a row from an older version that stored the junk title.
+            try await database.writer.write { db in
+                var b = try Book.fetchOne(db)!
+                b.title = "0071501126.pdf"
+                b.titleSort = Book.sortKey(forTitle: b.title)
+                try b.update(db)
+                try ProvenanceRecord(bookId: b.id!, field: "title", source: .embedded).save(db)
+            }
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.title, "What Customers Want Using Outcome Driven Innovation",
+                        "re-extract must repair a junk embedded title from the filename")
+            let provenance = try database.provenance(forBook: book!.id!)
+            expectNil(provenance["title"], "repaired title leaves no stale embedded provenance")
+
+            // Manual titles are never touched, junk-looking or not.
+            try await database.writer.write { db in
+                var b = try Book.fetchOne(db)!
+                b.title = "My Own 12345678 Title.pdf"
+                try b.update(db)
+                try ProvenanceRecord(bookId: b.id!, field: "title", source: .manual).save(db)
+            }
+            _ = try await pipeline.reextractEmbedded()
+            book = try await database.writer.read { try Book.fetchOne($0) }
+            expectEqual(book?.title, "My Own 12345678 Title.pdf", "manual titles must survive")
+        }
+    }
+
     await runner.run("e2e: scan groups Dune trio, parses Persian epub, exports valid JSON") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")

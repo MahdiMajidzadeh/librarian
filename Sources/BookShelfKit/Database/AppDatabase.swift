@@ -110,7 +110,60 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        // v3: repair rows scanned by older versions that stored a junk
+        // embedded title (the source filename or a bare ISBN stamped into a
+        // PDF/epub Title field, e.g. "0071501126.pdf"). Re-derive the title
+        // from the filename, salvage any ISBN found in the junk, and drop the
+        // stale embedded-title provenance. Manual/online titles are excluded
+        // by the `source = 'embedded'` filter, so this never overwrites a
+        // user edit or looked-up value.
+        migrator.registerMigration("v3-repair-junk-embedded-titles") { db in
+            try repairJunkEmbeddedTitles(db)
+        }
+
         return migrator
+    }
+
+    /// Repairs rows whose embedded title is junk. Idempotent and safe to run
+    /// outside migrations. Returns the number of books repaired.
+    @discardableResult
+    public static func repairJunkEmbeddedTitles(_ db: Database) throws -> Int {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT b.id AS id, b.title AS title, b.isbn10 AS isbn10, b.isbn13 AS isbn13,
+                   (SELECT bf.path FROM bookFile bf
+                    WHERE bf.bookId = b.id ORDER BY bf.path LIMIT 1) AS path
+            FROM book b
+            JOIN provenance p
+              ON p.bookId = b.id AND p.field = 'title' AND p.source = 'embedded'
+            """)
+        var repaired = 0
+        for row in rows {
+            let title: String = row["title"]
+            guard EmbeddedMetadata.isJunkTitle(title) else { continue }
+            let id: Int64 = row["id"]
+
+            // Salvage a valid ISBN hidden in the junk title.
+            if (row["isbn10"] as String?) == nil, (row["isbn13"] as String?) == nil,
+               let isbn = Normalizer.extractISBN(title) {
+                let column = isbn.count == 13 ? "isbn13" : "isbn10"
+                try db.execute(sql: "UPDATE book SET \(column) = ? WHERE id = ?",
+                               arguments: [isbn, id])
+            }
+
+            // Re-derive the title from the filename stem.
+            let stem = (row["path"] as String?)
+                .map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
+                ?? title
+            let inferred = GroupingEngine.inferTitleAuthors(fromStem: stem)
+            try db.execute(
+                sql: "UPDATE book SET title = ?, titleSort = ?, updatedAt = ? WHERE id = ?",
+                arguments: [inferred.title, Book.sortKey(forTitle: inferred.title), Date(), id])
+            try db.execute(
+                sql: "DELETE FROM provenance WHERE bookId = ? AND field = 'title'",
+                arguments: [id])
+            repaired += 1
+        }
+        return repaired
     }
 }
 

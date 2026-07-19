@@ -64,6 +64,20 @@ public final class ScanPipeline: Sendable {
         var touchedFields: [String] = []
 
         if let meta = prepared.metadata {
+            // Junk embedded titles ("0071501126.pdf", bare ISBNs) stored by
+            // older versions: reset to the filename-derived title and drop
+            // the stale provenance so re-extract repairs the row. Manual and
+            // online titles have a different source and are untouched.
+            let titleSource = (try? provenanceSource(db, bookId: bookId, field: "title")) ?? nil
+            if titleSource == .embedded, EmbeddedMetadata.isJunkTitle(book.title) {
+                let inferred = GroupingEngine.inferTitleAuthors(fromStem: prepared.seed.rawStem)
+                book.title = inferred.title
+                book.titleSort = Book.sortKey(forTitle: inferred.title)
+                try ProvenanceRecord
+                    .filter(ProvenanceRecord.Columns.bookId == bookId)
+                    .filter(ProvenanceRecord.Columns.field == "title")
+                    .deleteAll(db)
+            }
             if let title = meta.title, !title.isEmpty, isFilenamePlaceholder(book, db: db) {
                 book.title = title
                 book.titleSort = Book.sortKey(forTitle: title)
