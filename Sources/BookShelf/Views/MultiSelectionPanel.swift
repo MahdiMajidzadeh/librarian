@@ -44,7 +44,8 @@ struct MultiSelectionPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(selected) { item in
                         HStack(spacing: 8) {
-                            CoverView(path: item.book.coverCachePath, title: item.book.title)
+                            CoverView(path: item.book.coverCachePath, title: item.book.title,
+                                      stamp: item.book.updatedAt)
                                 .frame(width: 26, height: 38)
                                 .clipShape(RoundedRectangle(cornerRadius: 3))
                             VStack(alignment: .leading, spacing: 1) {

@@ -74,7 +74,8 @@ struct BookGridCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            CoverView(path: item.book.coverCachePath, title: item.book.title)
+            CoverView(path: item.book.coverCachePath, title: item.book.title,
+                      stamp: item.book.updatedAt)
                 .frame(height: 210)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -104,6 +105,10 @@ struct BookGridCell: View {
 struct CoverView: View {
     let path: String?
     let title: String
+    /// Covers are rewritten in place at a stable path, so `path` alone can't
+    /// tell SwiftUI the image changed — pass `book.updatedAt` so the view
+    /// value differs and the body re-reads the file after a cover swap.
+    let stamp: Date?
 
     var body: some View {
         if let path, let image = CoverImageLoader.shared.image(atPath: path) {

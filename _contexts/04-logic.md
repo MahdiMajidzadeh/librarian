@@ -91,7 +91,9 @@ Stored outside the library folder: 600 px JPEG for the grid + the original.
 `ScanPipeline.coverRank` ranks sources so an embedded epub/mobi/azw3 cover
 replaces a PDF first-page render, never the reverse. Cover files are
 rewritten in place, so `CoverImageLoader` (app side) keys its cache on
-path + mtime.
+path + mtime — and `CoverView` takes a `stamp: Date?` (`book.updatedAt`)
+so SwiftUI's view diffing can't skip re-rendering when the path string is
+unchanged after a cover swap. Every `CoverView` call site must pass it.
 
 ## Database (`Database/`)
 

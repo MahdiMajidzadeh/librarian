@@ -81,7 +81,8 @@ private struct LibraryBookHeader: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            CoverView(path: item.book.coverCachePath, title: item.book.title)
+            CoverView(path: item.book.coverCachePath, title: item.book.title,
+                      stamp: item.book.updatedAt)
                 .frame(width: 44, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
