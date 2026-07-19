@@ -41,10 +41,13 @@ public enum EpubParser {
         meta.isbn = opf.identifiers.compactMap(Normalizer.extractISBN).first
 
         if let coverHref = opf.coverHref {
+            // OPF hrefs are URIs — "cover%20art.jpg" names the zip entry
+            // "cover art.jpg".
+            let decodedHref = coverHref.removingPercentEncoding ?? coverHref
             let opfDir = (opfPath as NSString).deletingLastPathComponent
             let coverPath = opfDir.isEmpty
-                ? coverHref
-                : (opfDir as NSString).appendingPathComponent(coverHref)
+                ? decodedHref
+                : (opfDir as NSString).appendingPathComponent(decodedHref)
             meta.coverData = try? data(from: archive, path: normalize(zipPath: coverPath))
         }
         return meta

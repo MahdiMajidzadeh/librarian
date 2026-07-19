@@ -120,7 +120,11 @@ public enum MobiParser {
                     case .language:
                         meta.language = record0.string(dataRange, encoding: encoding)
                     case .coverOffset:
-                        coverOffset = record0.u32(cursor + 8)
+                        // Needs a 4-byte payload (8-byte header + u32); a
+                        // shorter record would read into the next one.
+                        if length >= 12 {
+                            coverOffset = record0.u32(cursor + 8)
+                        }
                     case nil:
                         break
                     }
