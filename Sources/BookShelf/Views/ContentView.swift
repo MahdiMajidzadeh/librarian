@@ -226,7 +226,7 @@ struct ContentView: View {
             } label: {
                 Label("Rename…", systemImage: "character.cursor.ibeam")
             }
-            .disabled(model.items.isEmpty)
+            .disabled(model.selection.isEmpty && model.displayedItems.isEmpty)
             .help("Preview and rename the selection (or all shown books) to your template")
 
             Menu {
@@ -237,7 +237,7 @@ struct ContentView: View {
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
-            .disabled(model.items.isEmpty)
+            .disabled(model.selection.isEmpty && model.displayedItems.isEmpty)
             .help("Export the selection (or current filter result) as JSON or CSV")
 
             filterMenu

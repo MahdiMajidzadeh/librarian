@@ -28,11 +28,14 @@ struct BookShelfApp: App {
         }
         .commands {
             CommandGroup(after: .undoRedo) {
+                // No .disabled here (same @Observable re-evaluation issue as
+                // the Library menu below — items grey out permanently), and
+                // not ⌘⇧Z, which the system Redo item owns. undoLastRename
+                // is a safe no-op when there is nothing to undo.
                 Button("Undo Last Rename Batch") {
                     Task { await model.undoLastRename() }
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(model.undoableBatch == nil)
+                .keyboardShortcut("z", modifiers: [.command, .option])
             }
             CommandMenu("Library") {
                 Button("Rescan Folder") {

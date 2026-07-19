@@ -134,6 +134,14 @@ public struct Book: Codable, Identifiable, Equatable, Sendable {
     /// ["Frank Herbert"] → "herbert, frank"
     public static func sortKey(forAuthors authors: [String]) -> String? {
         guard let first = authors.first, !first.isEmpty else { return nil }
+        // "Herbert, Frank" is already inverted — re-inverting it would sort
+        // under the first name with a stray comma.
+        if first.contains(",") {
+            return first.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .joined(separator: ", ")
+                .lowercased()
+        }
         let parts = first.split(separator: " ").map(String.init)
         guard parts.count > 1, let last = parts.last else { return first.lowercased() }
         return "\(last), \(parts.dropLast().joined(separator: " "))".lowercased()

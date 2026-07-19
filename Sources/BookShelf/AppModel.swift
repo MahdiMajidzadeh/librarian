@@ -139,7 +139,22 @@ final class AppModel {
             try FolderAccess.persist(url: url, in: database)
             libraryFolder = url
             restartFolderWatcher()
-            Task { await self.scan() }
+            let rootPath = url.standardizedFileURL.path
+            Task {
+                // Files from a previously chosen folder are no longer part of
+                // this library — flag them missing (the scanner only diffs
+                // under the current root) so Purge Missing can remove them.
+                try? await database.writer.write { db in
+                    let outside = try BookFile.fetchAll(db).filter {
+                        !$0.missingFlag && !$0.path.hasPrefix(rootPath + "/")
+                    }
+                    for var file in outside {
+                        file.missingFlag = true
+                        try file.update(db)
+                    }
+                }
+                await self.scan()
+            }
         } catch {
             errorMessage = "Could not save folder access: \(error.localizedDescription)"
         }
@@ -150,22 +165,40 @@ final class AppModel {
         return false
     }
 
+    /// Progress callbacks hop to the main actor via unstructured Tasks; a
+    /// late-arriving one must not resurrect progress after the reset (which
+    /// would leave `isScanning` stuck true). Bumping the generation at start
+    /// and at reset invalidates stragglers from the previous run.
+    private var scanGeneration = 0
+
+    /// Set when the folder watcher fires mid-scan — handled when the current
+    /// scan finishes instead of being dropped.
+    private var rescanPending = false
+
     func scan() async {
         Self.logAction("scan folder=\(libraryFolder?.lastPathComponent ?? "nil") isScanning=\(isScanning)")
         guard let root = libraryFolder, !isScanning else { return }
+        scanGeneration += 1
+        let generation = scanGeneration
         scanProgress = ScanProgress(phase: .enumerating, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
         do {
             let result = try await pipeline.scan(root: root, ignoredExtensions: ignoredExtensions) { progress in
                 Task { @MainActor [weak self] in
-                    self?.scanProgress = progress
+                    guard let self, self.scanGeneration == generation else { return }
+                    self.scanProgress = progress
                 }
             }
             lastScanResult = result
         } catch {
             errorMessage = "Scan failed: \(error.localizedDescription)"
         }
+        scanGeneration += 1
         scanProgress = nil
+        if rescanPending {
+            rescanPending = false
+            Task { await self.scan() }
+        }
     }
 
     // MARK: - Folder watching (FR-1.6, P1)
@@ -186,8 +219,14 @@ final class AppModel {
         guard watchFolderEnabled, let root = libraryFolder else { return }
         let watcher = FolderWatcher { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, !self.isScanning else { return }
-                await self.scan()
+                guard let self else { return }
+                // Don't drop changes that land mid-scan (e.g. files still
+                // being copied in) — queue one follow-up scan instead.
+                if self.isScanning {
+                    self.rescanPending = true
+                } else {
+                    await self.scan()
+                }
             }
         }
         watcher.start(watching: root)
@@ -200,18 +239,22 @@ final class AppModel {
     func reextractMetadata() async {
         Self.logAction("reextractMetadata isScanning=\(isScanning)")
         guard !isScanning else { return }
+        scanGeneration += 1
+        let generation = scanGeneration
         scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
         do {
             let count = try await pipeline.reextractEmbedded { done, total in
                 Task { @MainActor [weak self] in
-                    self?.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
+                    guard let self, self.scanGeneration == generation else { return }
+                    self.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
                 }
             }
             lastResolveSummary = "Re-extracted embedded metadata from \(count) files"
         } catch {
             errorMessage = "Re-extract failed: \(error.localizedDescription)"
         }
+        scanGeneration += 1
         scanProgress = nil
     }
 
@@ -220,12 +263,15 @@ final class AppModel {
     func rebuildGroups() async {
         Self.logAction("rebuildGroups isScanning=\(isScanning)")
         guard !isScanning else { return }
+        scanGeneration += 1
+        let generation = scanGeneration
         scanProgress = ScanProgress(phase: .processing, processed: 0, total: 0)
         let pipeline = ScanPipeline(database: database, coverCache: coverCache)
         do {
             let summary = try await pipeline.rebuildGroups { done, total in
                 Task { @MainActor [weak self] in
-                    self?.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
+                    guard let self, self.scanGeneration == generation else { return }
+                    self.scanProgress = ScanProgress(phase: .processing, processed: done, total: total)
                 }
             }
             lastResolveSummary =
@@ -233,6 +279,7 @@ final class AppModel {
         } catch {
             errorMessage = "Rebuild groups failed: \(error.localizedDescription)"
         }
+        scanGeneration += 1
         scanProgress = nil
     }
 
@@ -274,21 +321,27 @@ final class AppModel {
             }
         }
 
-        result.sort { a, b in
-            let ordered: Bool
+        // Descending swaps the operands rather than negating `<` — negation
+        // returns true for equal keys, which violates strict weak ordering
+        // (undefined sort behavior once ties exist, e.g. many nil years).
+        // Ties fall back to the title so the order is deterministic.
+        result.sort { first, second in
+            let (a, b) = sortAscending ? (first, second) : (second, first)
             switch sortKey {
             case .title:
-                ordered = a.book.titleSort < b.book.titleSort
+                break
             case .author:
-                ordered = (a.book.authorSort ?? "~") < (b.book.authorSort ?? "~")
+                let x = a.book.authorSort ?? "~", y = b.book.authorSort ?? "~"
+                if x != y { return x < y }
             case .year:
-                ordered = (a.book.year ?? Int.min) < (b.book.year ?? Int.min)
+                let x = a.book.year ?? Int.min, y = b.book.year ?? Int.min
+                if x != y { return x < y }
             case .dateAdded:
-                ordered = a.book.createdAt < b.book.createdAt
+                if a.book.createdAt != b.book.createdAt { return a.book.createdAt < b.book.createdAt }
             case .size:
-                ordered = a.totalSizeBytes < b.totalSizeBytes
+                if a.totalSizeBytes != b.totalSizeBytes { return a.totalSizeBytes < b.totalSizeBytes }
             }
-            return sortAscending ? ordered : !ordered
+            return a.book.titleSort < b.book.titleSort
         }
         return result
     }
@@ -440,15 +493,21 @@ final class AppModel {
         items.filter { $0.book.metadataStatus != .complete }.map(\.id)
     }
 
+    private var resolveGeneration = 0
+
     func resolveMetadata(ids: [Int64]) async {
         guard !ids.isEmpty, !isResolving else { return }
         let service = makeLookupService()
+        resolveGeneration += 1
+        let generation = resolveGeneration
         resolveProgress = (0, ids.count)
         let outcome = await service.resolveBatch(bookIds: ids, policy: applyPolicy) { done, total in
             Task { @MainActor [weak self] in
-                self?.resolveProgress = (done, total)
+                guard let self, self.resolveGeneration == generation else { return }
+                self.resolveProgress = (done, total)
             }
         }
+        resolveGeneration += 1
         resolveProgress = nil
 
         // Queue ambiguous books for the candidate picker (FR-3.4).
@@ -456,7 +515,12 @@ final class AppModel {
             let title = items.first { $0.id == bookId }?.book.title ?? "Book \(bookId)"
             pickerQueue.append(PickerRequest(id: bookId, bookTitle: title, candidates: candidates))
         }
-        advancePicker()
+        // Don't clobber a picker sheet the user currently has open (possible
+        // when resolving from a second window); the queue drains as the open
+        // one is answered.
+        if pendingPicker == nil {
+            advancePicker()
+        }
 
         var parts: [String] = []
         if !outcome.resolved.isEmpty { parts.append("\(outcome.resolved.count) resolved") }
@@ -626,6 +690,32 @@ final class AppModel {
         }
     }
 
+    /// Clears the cover cache AND detaches every book from its now-deleted
+    /// cover file. Leaving the dangling paths in place would keep their
+    /// cover rank, silently blocking re-extraction from ever restoring a
+    /// cover; clearing the provenance rows lets embedded covers re-apply.
+    func clearCoverCache() async {
+        Self.logAction("clearCoverCache")
+        do {
+            try coverCache.clear()
+            try await database.writer.write { db in
+                let books = try Book.fetchAll(db).filter { $0.coverCachePath != nil }
+                for var book in books {
+                    book.coverCachePath = nil
+                    book.coverSourceFormat = nil
+                    book.metadataStatus = ScanPipeline.status(for: book)
+                    book.updatedAt = Date()
+                    try book.update(db)
+                }
+                try ProvenanceRecord
+                    .filter(ProvenanceRecord.Columns.field == "cover")
+                    .deleteAll(db)
+            }
+        } catch {
+            errorMessage = "Clearing cover cache failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Settings access
 
     func settingValue(_ key: String, default defaultValue: String = "") -> String {
@@ -698,6 +788,7 @@ final class AppModel {
 
     private(set) var exportProgress: (done: Int, total: Int)?
     private(set) var lastExportSummary: String?
+    private var exportGeneration = 0
 
     enum ExportKind {
         case json(includeCovers: Bool)
@@ -724,13 +815,19 @@ final class AppModel {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        exportGeneration += 1
+        let generation = exportGeneration
         exportProgress = (0, ids.count)
-        defer { exportProgress = nil }
+        defer {
+            exportGeneration += 1
+            exportProgress = nil
+        }
         do {
             let records = try await ExportRecord.fetch(from: database, bookIds: ids)
             let progress: @Sendable (Int, Int) -> Void = { done, total in
                 Task { @MainActor [weak self] in
-                    self?.exportProgress = (done, total)
+                    guard let self, self.exportGeneration == generation else { return }
+                    self.exportProgress = (done, total)
                 }
             }
             let coverCache = self.coverCache

@@ -141,9 +141,13 @@ struct CoverView: View {
 }
 
 /// Small NSImage cache so grid scrolling doesn't hit disk repeatedly.
+@MainActor
 final class CoverImageLoader {
     static let shared = CoverImageLoader()
     private let cache = NSCache<NSString, NSImage>()
+    /// Cache keys include the mtime, so invalidation by bare path needs the
+    /// last key each path was stored under.
+    private var lastKeyByPath: [String: NSString] = [:]
 
     func image(atPath path: String) -> NSImage? {
         // Covers are rewritten in place (e.g. a better embedded cover replaces
@@ -151,6 +155,10 @@ final class CoverImageLoader {
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)
             .map { String($0.timeIntervalSince1970) } ?? "0"
         let key = "\(path)|\(mtime)" as NSString
+        if let stale = lastKeyByPath[path], stale != key {
+            cache.removeObject(forKey: stale)
+        }
+        lastKeyByPath[path] = key
         if let cached = cache.object(forKey: key) {
             return cached
         }
@@ -161,7 +169,9 @@ final class CoverImageLoader {
 
     /// Drops a stale entry after the cover file is rewritten in place.
     func invalidate(path: String) {
-        cache.removeObject(forKey: path as NSString)
+        if let key = lastKeyByPath.removeValue(forKey: path) {
+            cache.removeObject(forKey: key)
+        }
     }
 }
 

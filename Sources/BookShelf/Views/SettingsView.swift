@@ -202,9 +202,14 @@ struct SettingsView: View {
         Section("Cover Cache") {
             LabeledContent("Size", value: cacheSize.formattedFileSize)
             Button("Clear Cache") {
-                try? model.coverCache.clear()
-                cacheSize = model.coverCache.totalSizeBytes()
+                Task {
+                    await model.clearCoverCache()
+                    cacheSize = model.coverCache.totalSizeBytes()
+                }
             }
+            Text("Covers regenerate on the next scan or “Re-extract Embedded Metadata”.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }
