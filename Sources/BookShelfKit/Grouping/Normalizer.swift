@@ -7,7 +7,7 @@ public enum Normalizer {
     static let noiseWords: Set<String> = [
         "v1", "v2", "v3", "v4", "v5", "final", "draft", "copy", "ocr",
         "scan", "scanned", "ebook", "retail", "edited", "fixed",
-        "1", "2", "3", "epub", "pdf", "mobi", "azw3", "en", "eng",
+        "epub", "pdf", "mobi", "azw3", "en", "eng",
     ]
 
     /// Casefolds, strips diacritics, removes punctuation, collapses whitespace.
@@ -54,6 +54,13 @@ public enum Normalizer {
     /// removed by caller; separators `._-` collapsed; noise words stripped.
     /// "Dune_v2.final" → "dune"
     public static func normalizeFilenameStem(_ stem: String) -> String {
+        // Trailing "(1)"-style duplicate-copy markers are noise, but bare
+        // volume numbers are not ("Foundation 2" is a different work than
+        // "Foundation 1") — strip only the parenthesized trailing form.
+        var stem = stem
+        while let range = stem.range(of: #"\s*\(\d+\)\s*$"#, options: .regularExpression) {
+            stem.removeSubrange(range)
+        }
         let separated = stem.map { ch -> Character in
             if "._-()[]{}+".contains(ch) { return " " }
             return ch

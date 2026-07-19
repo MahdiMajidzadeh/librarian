@@ -99,12 +99,17 @@ public final class GroupingEngine: @unchecked Sendable {
             return .join(bookId: bookId, method: .metadata)
         }
         // Rule 3: filename stem candidates with author-token agreement (§9).
+        // Agreement means set equality, not intersection: the flipped
+        // "Author - Title" reading uses real titles as the author set, and
+        // intersection would merge different works by one author ("Dune" vs
+        // "Dune Messiah" intersect on "dune"). Equality errs toward keeping
+        // works separate — a false split is recoverable (ISBN/metadata rules,
+        // manual merge); a false merge silently corrupts both books.
         for candidate in Self.stemCandidates(seed.rawStem) {
             guard let entries = stemIndex[candidate.titleKey] else { continue }
             for entry in entries {
                 let bothHaveAuthors = !entry.authorTokens.isEmpty && !candidate.authorTokens.isEmpty
-                let agree = !bothHaveAuthors
-                    || !entry.authorTokens.intersection(candidate.authorTokens).isEmpty
+                let agree = !bothHaveAuthors || entry.authorTokens == candidate.authorTokens
                 if agree {
                     return .join(bookId: entry.bookId, method: .filename)
                 }
@@ -136,11 +141,14 @@ public final class GroupingEngine: @unchecked Sendable {
 
         case .createNew:
             let inferred = Self.inferTitleAuthors(fromStem: seed.rawStem)
+            // Store the normalized ISBN, not the raw identifier — the raw
+            // form ("urn:isbn:978-…") would leak into queries and exports.
+            let normalizedISBN = seed.isbn.flatMap(Normalizer.extractISBN)
             var book = Book(
                 title: seed.title ?? inferred.title,
                 authors: seed.authors.isEmpty ? inferred.authors : seed.authors,
-                isbn10: seed.isbn.flatMap { Normalizer.extractISBN($0)?.count == 10 ? $0 : nil },
-                isbn13: seed.isbn.flatMap { Normalizer.extractISBN($0)?.count == 13 ? $0 : nil },
+                isbn10: normalizedISBN?.count == 10 ? normalizedISBN : nil,
+                isbn13: normalizedISBN?.count == 13 ? normalizedISBN : nil,
                 metadataStatus: seed.title == nil ? .unresolved : .partial,
                 groupMethod: .single
             )
@@ -189,6 +197,9 @@ public final class GroupingEngine: @unchecked Sendable {
         let titleKey = Normalizer.normalizeTitle(title)
         guard !titleKey.isEmpty else { return nil }
         let authorKey = Normalizer.authorTokenSet(authors).sorted().joined(separator: " ")
+        // A weak title ("2007", "Volume 1") can only identify a work when an
+        // author set backs it up — same failure class as weak stem keys.
+        guard isViableTitleKey(titleKey) || !authorKey.isEmpty else { return nil }
         return "\(titleKey)|\(authorKey)"
     }
 

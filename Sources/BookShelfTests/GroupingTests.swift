@@ -60,6 +60,30 @@ func groupingRegressionTests(_ runner: TestRunner) async {
         expect(noop.isEmpty, "single-file book cannot be ungrouped further")
     }
 
+    await runner.run("different works by one author never merge via authored filenames") {
+        let engine = GroupingEngine()
+        _ = try await inMemoryAssign(engine, GroupingSeed(rawStem: "Frank Herbert - Dune"))
+        expectEqual(engine.decide(GroupingSeed(rawStem: "Frank Herbert - Dune Messiah")), .createNew,
+                    "flipped Author-Title reading must not merge series works on a shared token")
+        // The same work with the split order swapped still joins.
+        if case .join = engine.decide(GroupingSeed(rawStem: "Dune - Frank Herbert")) {} else {
+            expect(false, "Title - Author order of the same work must still join")
+        }
+    }
+
+    await runner.run("volume numbers are significant; (n) copy markers are not") {
+        let engine = GroupingEngine()
+        _ = try await inMemoryAssign(engine, GroupingSeed(rawStem: "Foundation 1"))
+        expectEqual(engine.decide(GroupingSeed(rawStem: "Foundation 2")), .createNew,
+                    "volume numbers distinguish works")
+
+        let engine2 = GroupingEngine()
+        _ = try await inMemoryAssign(engine2, GroupingSeed(rawStem: "dune"))
+        if case .join = engine2.decide(GroupingSeed(rawStem: "dune (1)")) {} else {
+            expect(false, "a duplicate-copy (1) marker must still group with the original")
+        }
+    }
+
     await runner.run("numeric and stopword-only title keys are not viable") {
         expect(!GroupingEngine.isViableTitleKey("2007"), "bare year")
         expect(!GroupingEngine.isViableTitleKey("the"), "stopword")
