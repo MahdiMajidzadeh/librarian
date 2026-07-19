@@ -4,6 +4,9 @@ import BookShelfKit
 @MainActor
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    // Always-open detail sidebar; a real @State (not .constant) so the
+    // presentation modifier reliably applies it.
+    @State private var inspectorShown = true
 
     var body: some View {
         @Bindable var model = model
@@ -16,14 +19,24 @@ struct ContentView: View {
         }
         .searchable(text: $model.searchText, placement: .toolbar,
                     prompt: "Title, author, series, ISBN, tag, filename")
-        .inspector(isPresented: detailShownBinding) {
-            if let item = model.detailItem {
-                BookDetailView(item: item)
-                    .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
-            } else if model.selection.count > 1 {
-                MultiSelectionPanel()
-                    .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
+        // The inspector stays open even with nothing selected (placeholder
+        // instead of collapsing) so the grid doesn't reflow on every
+        // selection change.
+        .inspector(isPresented: $inspectorShown) {
+            Group {
+                if let item = model.detailItem {
+                    BookDetailView(item: item)
+                } else if model.selection.count > 1 {
+                    MultiSelectionPanel()
+                } else {
+                    ContentUnavailableView {
+                        Label("No Selection", systemImage: "book")
+                    } description: {
+                        Text("Select a book to see its details.")
+                    }
+                }
             }
+            .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
         }
         .toolbar { toolbarContent }
         .safeAreaInset(edge: .bottom) {
@@ -57,15 +70,6 @@ struct ContentView: View {
         return Binding(
             get: { model.renamePlan != nil },
             set: { if !$0 { model.renamePlan = nil } }
-        )
-    }
-
-    @MainActor
-    private var detailShownBinding: Binding<Bool> {
-        let model = self.model
-        return Binding(
-            get: { model.detailItem != nil || model.selection.count > 1 },
-            set: { if !$0 { model.selection = [] } }
         )
     }
 
