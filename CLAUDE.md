@@ -4,6 +4,19 @@ Librarian — native macOS 14+ SwiftUI app that catalogs a folder of ebooks
 **in place** (no files moved, only renamed with preview + undo). Spec lives in
 [requirements.md](requirements.md); FR/NFR numbers in code comments refer to it.
 
+## Context workflow — mandatory for every change
+
+Living docs live in [_contexts/](_contexts/README.md) (overview, development,
+features, logic). For **every** development task:
+
+1. **Before coding**, read the relevant `_contexts` file(s). If the request
+   fits the documented design/invariants, proceed.
+2. If it **conflicts** with a documented invariant or design decision, stop
+   and ask the user before writing code.
+3. **After coding**, update the affected `_contexts` file(s) to match the code.
+4. **Always finish by building** (`swift build`; run `swift run
+   bookshelf-tests` when Kit logic changed) and smoke-check the app launches.
+
 ## Toolchain — read this first
 
 This machine has **no Xcode**, only Command Line Tools (Swift 5.9.2). Consequences:

@@ -272,6 +272,7 @@ struct ContentView: View {
             }
             filterToggle(.missingOnDisk, label: "Missing on Disk")
             filterToggle(.autoGrouped, label: "Auto-grouped")
+            filterToggle(.duplicateFormats, label: "Duplicate Formats")
             if !model.allTags.isEmpty {
                 Menu("Tag") {
                     ForEach(model.allTags, id: \.self) { tag in

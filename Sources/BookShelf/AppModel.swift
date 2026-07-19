@@ -20,6 +20,10 @@ struct BookListItem: Identifiable, Equatable {
     var hasMissingFiles: Bool { files.contains(where: \.missingFlag) }
     var allFilesMissing: Bool { !files.isEmpty && files.allSatisfy(\.missingFlag) }
     var isAutoGrouped: Bool { book.groupMethod == .filename && files.count > 1 }
+    /// At least two files of the same format in the group (e.g. two PDFs).
+    var hasDuplicateFormats: Bool {
+        Dictionary(grouping: files, by: \.format).contains { $1.count > 1 }
+    }
 }
 
 enum ViewMode: String {
@@ -47,6 +51,7 @@ enum LibraryFilter: Hashable {
     case status(MetadataStatus)
     case missingOnDisk
     case autoGrouped
+    case duplicateFormats
     case tag(String)
 }
 
@@ -322,6 +327,8 @@ final class AppModel {
                 result = result.filter(\.hasMissingFiles)
             case .autoGrouped:
                 result = result.filter(\.isAutoGrouped)
+            case .duplicateFormats:
+                result = result.filter(\.hasDuplicateFormats)
             case .tag(let tag):
                 result = result.filter { $0.book.tags.contains(tag) }
             }
