@@ -232,6 +232,38 @@ func endToEndTests(_ runner: TestRunner) async {
         }
     }
 
+    await runner.run("manual cover survives re-extract") {
+        try await withTempDirectory { dir in
+            let library = dir.appendingPathComponent("library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let database = try AppDatabase.inMemory()
+            let coverCache = try CoverCache(directory: dir.appendingPathComponent("covers"))
+            let pipeline = ScanPipeline(database: database, coverCache: coverCache)
+
+            try Fixtures.makeEpub(at: library.appendingPathComponent("dune.epub"))
+            _ = try await pipeline.scan(root: library)
+
+            // The user replaces the cover: manual provenance, and (as in the
+            // app) coverSourceFormat is not a book format anymore.
+            let bookId = try await database.writer.read { try Book.fetchOne($0)!.id! }
+            let gridURL = try coverCache.store(
+                imageData: Fixtures.jpegData(width: 44, height: 66, gray: 0.9), bookId: bookId)
+            try await database.writer.write { db in
+                var book = try Book.fetchOne(db)!
+                book.coverSourceFormat = nil
+                book.coverCachePath = gridURL.path
+                try book.update(db)
+                try ProvenanceRecord(bookId: bookId, field: "cover", source: .manual).save(db)
+            }
+            let manualBytes = try Data(contentsOf: gridURL)
+
+            _ = try await pipeline.reextractEmbedded()
+            let afterBytes = try Data(contentsOf: gridURL)
+            expect(manualBytes == afterBytes,
+                   "an embedded cover must never overwrite a manually chosen cover")
+        }
+    }
+
     await runner.run("e2e: scan groups Dune trio, parses Persian epub, exports valid JSON") {
         try await withTempDirectory { dir in
             let library = dir.appendingPathComponent("library")

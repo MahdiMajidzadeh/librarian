@@ -43,6 +43,11 @@ public final class ScanPipeline: Sendable {
                 let bookId = try engine.assignBook(db, seed: prepared.seed)
                 try Self.applyEmbedded(db, bookId: bookId, prepared: prepared, coverCache: coverCache)
                 return bookId
+            },
+            applyChanged: { db, existing, prepared in
+                // A file overwritten in place keeps its book; refresh the
+                // book from the re-parsed content (fill-empty semantics).
+                try Self.applyEmbedded(db, bookId: existing.bookId, prepared: prepared, coverCache: coverCache)
             }
         )
         return try await scanner.scan(
@@ -104,7 +109,10 @@ public final class ScanPipeline: Sendable {
             }
             // Cover quality ranking: a real embedded cover (epub/mobi/azw3)
             // replaces a PDF first-page render, never the other way round.
-            if let coverData = meta.coverData {
+            // Manual and online covers outrank any embedded cover (FR-3.2).
+            let coverSource = (try? provenanceSource(db, bookId: bookId, field: "cover")) ?? nil
+            if let coverData = meta.coverData,
+               coverSource == nil || coverSource == .embedded {
                 let incoming = coverRank(prepared.file.format)
                 let existing = book.coverCachePath == nil ? 0 : coverRank(book.coverSourceFormat)
                 if incoming > existing,
@@ -278,15 +286,37 @@ public final class ScanPipeline: Sendable {
         let preserved = keptOldBooks
         let prepared = preparedByFile
         let oldAutoBookIds = Set(oldSets.keys)
+        let capturedOldSets = oldSets
 
         var summary = try await database.writer.write { db -> RegroupSummary in
             var result = RegroupSummary()
+            // Books holding manual edits or online-resolved metadata must
+            // survive a rebuild — "resolved metadata is never discarded".
+            let protectedIds = Set(try ProvenanceRecord.fetchAll(db)
+                .filter { $0.source == .manual || $0.source == .openLibrary || $0.source == .googleBooks }
+                .map(\.bookId))
+            var claimed = preserved
             for (group, method) in plan {
-                // Seed the new book from the group's best reading, then let
-                // each file's embedded metadata fill it in as during a scan.
-                let firstSeed = prepared[group[0].id!]?.seed
-                    ?? .fromFilename(URL(fileURLWithPath: group[0].path))
-                let bookId = try GroupingEngine().assignBook(db, seed: firstSeed)
+                let fileIds = Set(group.compactMap(\.id))
+                // Reuse the old book with the largest file overlap when it
+                // carries protected metadata; otherwise build fresh.
+                let reusable = capturedOldSets
+                    .filter { protectedIds.contains($0.key) && !claimed.contains($0.key) }
+                    .map { (id: $0.key, overlap: $0.value.intersection(fileIds).count) }
+                    .filter { $0.overlap > 0 }
+                    .max { ($0.overlap, $1.id) < ($1.overlap, $0.id) }
+                let bookId: Int64
+                if let reuse = reusable {
+                    claimed.insert(reuse.id)
+                    bookId = reuse.id
+                } else {
+                    // Seed the new book from the group's best reading, then
+                    // let each file's embedded metadata fill it in as during
+                    // a scan.
+                    let firstSeed = prepared[group[0].id!]?.seed
+                        ?? .fromFilename(URL(fileURLWithPath: group[0].path))
+                    bookId = try GroupingEngine().assignBook(db, seed: firstSeed)
+                }
                 for var file in group {
                     file.bookId = bookId
                     try file.update(db)

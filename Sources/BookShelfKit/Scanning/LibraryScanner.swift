@@ -78,15 +78,23 @@ public final class LibraryScanner {
     /// stem; the scan pipeline supplies grouping + metadata application.
     public typealias BookAssigner = (_ db: Database, _ prepared: PreparedFile) throws -> Int64
 
+    /// Called inside the write transaction for a file whose content changed
+    /// on disk (same path, new size/mtime) — the file keeps its book, but
+    /// metadata can be refreshed from the re-parsed content.
+    public typealias ChangeApplier = (_ db: Database, _ existing: BookFile, _ prepared: PreparedFile) throws -> Void
+
     private let prepare: FilePreparer
     private let assignBook: BookAssigner
+    private let applyChanged: ChangeApplier?
 
     public init(database: AppDatabase,
                 prepare: FilePreparer? = nil,
-                assignBook: BookAssigner? = nil) {
+                assignBook: BookAssigner? = nil,
+                applyChanged: ChangeApplier? = nil) {
         self.database = database
         self.prepare = prepare ?? { PreparedFile.filenameOnly($0) }
         self.assignBook = assignBook ?? Self.defaultAssigner
+        self.applyChanged = applyChanged
     }
 
     public static let defaultAssigner: BookAssigner = { db, prepared in
@@ -156,13 +164,14 @@ public final class LibraryScanner {
         // (which is @Sendable and cannot mutate captured state).
         enum Action: Sendable {
             case rediscovered(BookFile)
-            case changed(BookFile, ScannedFile)
+            case changed(BookFile, PreparedFile)
             case new(PreparedFile)
         }
 
         for chunk in files.chunked(into: 64) {
             var actions: [Action] = []
             var newFiles: [ScannedFile] = []
+            var changedFiles: [(BookFile, ScannedFile)] = []
             for file in chunk {
                 if let existing = knownByPath.removeValue(forKey: file.url.path) {
                     if existing.contentKey == file.contentKey {
@@ -172,15 +181,18 @@ public final class LibraryScanner {
                             result.unchanged += 1
                         }
                     } else {
-                        actions.append(.changed(existing, file))
+                        changedFiles.append((existing, file))
                     }
                 } else {
                     newFiles.append(file)
                 }
             }
 
-            // Parse new files concurrently, outside the write transaction.
-            if !newFiles.isEmpty {
+            // Parse new and changed files concurrently, outside the write
+            // transaction. A changed file keeps its book but is re-parsed so
+            // its metadata/cover don't go stale (FR-1.4 skips *unchanged*
+            // files only).
+            if !newFiles.isEmpty || !changedFiles.isEmpty {
                 let prepare = self.prepare
                 let prepared = await withTaskGroup(of: PreparedFile.self) { group in
                     for file in newFiles {
@@ -193,21 +205,36 @@ public final class LibraryScanner {
                     return results
                 }
                 actions.append(contentsOf: prepared.map { .new($0) })
+
+                let changedPrepared = await withTaskGroup(of: (Int, PreparedFile).self) { group in
+                    for (index, pair) in changedFiles.enumerated() {
+                        group.addTask { (index, prepare(pair.1)) }
+                    }
+                    var results: [(Int, PreparedFile)] = []
+                    for await item in group {
+                        results.append(item)
+                    }
+                    return results
+                }
+                for (index, preparedFile) in changedPrepared {
+                    actions.append(.changed(changedFiles[index].0, preparedFile))
+                }
             }
 
             let plan = actions
-            try await database.writer.write { [assignBook] db in
+            try await database.writer.write { [assignBook, applyChanged] db in
                 for action in plan {
                     switch action {
                     case .rediscovered(var file):
                         file.missingFlag = false
                         try file.update(db)
-                    case .changed(var record, let file):
-                        record.sizeBytes = file.sizeBytes
-                        record.modifiedAt = file.modifiedAt
-                        record.contentKey = file.contentKey
+                    case .changed(var record, let prepared):
+                        record.sizeBytes = prepared.file.sizeBytes
+                        record.modifiedAt = prepared.file.modifiedAt
+                        record.contentKey = prepared.file.contentKey
                         record.missingFlag = false
                         try record.update(db)
+                        try applyChanged?(db, record, prepared)
                     case .new(let prepared):
                         let bookId = try assignBook(db, prepared)
                         var record = BookFile(
@@ -232,8 +259,14 @@ public final class LibraryScanner {
             onProgress?(ScanProgress(phase: .processing, processed: processed, total: total))
         }
 
-        // Everything still in `knownByPath` under this root was not seen on disk.
-        let vanished = knownByPath.values.filter { !$0.missingFlag && $0.path.hasPrefix(rootPath + "/") }
+        // Everything still in `knownByPath` under this root was not seen on
+        // disk. Ignored extensions are excluded from enumeration, not gone —
+        // flagging them missing would let a later purge delete their books.
+        let vanished = knownByPath.values.filter {
+            !$0.missingFlag
+                && $0.path.hasPrefix(rootPath + "/")
+                && !ignoredExtensions.contains(URL(fileURLWithPath: $0.path).pathExtension.lowercased())
+        }
         if !vanished.isEmpty {
             try await database.writer.write { db in
                 for var file in vanished {

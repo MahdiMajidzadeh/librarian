@@ -32,9 +32,18 @@ public enum FolderAccess {
                 if let url = try? URL(
                     resolvingBookmarkData: data, options: options,
                     relativeTo: nil, bookmarkDataIsStale: &stale) {
-                    _ = url.startAccessingSecurityScopedResource()
+                    let accessing = url.startAccessingSecurityScopedResource()
                     if FileManager.default.fileExists(atPath: url.path) {
+                        // A stale bookmark still resolves now but will stop
+                        // eventually — re-create it while access works.
+                        if stale {
+                            try? persist(url: url, in: database)
+                        }
                         return url
+                    }
+                    // Not usable: balance the access we just started.
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
                     }
                 }
             }
