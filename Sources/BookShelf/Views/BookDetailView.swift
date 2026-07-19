@@ -65,6 +65,19 @@ struct BookDetailView: View {
                     Label("Ungroup", systemImage: "square.split.diagonal")
                 }
                 .help("Split every file of this book into its own entry — use when files were grouped wrongly")
+
+                Menu {
+                    ForEach(item.files.filter { !$0.missingFlag }, id: \.path) { file in
+                        Button(URL(fileURLWithPath: file.path).lastPathComponent) {
+                            Task { await model.useCover(from: file, bookId: item.id) }
+                        }
+                    }
+                    Divider()
+                    Button("Choose Image File…") { model.replaceCover(bookId: item.id) }
+                } label: {
+                    Label("Cover", systemImage: "photo")
+                }
+                .help("Pick which file's cover this book shows")
             }
         }
         .controlSize(.small)

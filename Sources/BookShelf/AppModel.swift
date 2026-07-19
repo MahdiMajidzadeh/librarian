@@ -705,6 +705,37 @@ final class AppModel {
         }
     }
 
+    /// Sets a grouped book's cover from one of its own files — the epub's
+    /// embedded cover, a PDF's first-page render, etc. An explicit user pick,
+    /// so it gets `.manual` provenance and survives re-extraction (FR-3.2).
+    func useCover(from file: BookFile, bookId: Int64) async {
+        Self.logAction("useCover book=\(bookId) file=\(file.id ?? -1)")
+        let url = URL(fileURLWithPath: file.path)
+        let format = file.format
+        let extracted = await Task.detached(priority: .userInitiated) {
+            MetadataExtractor.extract(url: url, format: format)
+        }.value
+        guard case .success(let meta)? = extracted, let coverData = meta.coverData else {
+            errorMessage = "“\(url.lastPathComponent)” has no usable cover."
+            return
+        }
+        do {
+            let gridURL = try coverCache.store(imageData: coverData, bookId: bookId)
+            try await database.writer.write { db in
+                guard var book = try Book.fetchOne(db, key: bookId) else { return }
+                book.coverCachePath = gridURL.path
+                book.coverSourceFormat = format
+                book.metadataStatus = ScanPipeline.status(for: book)
+                book.updatedAt = Date()
+                try book.update(db)
+                try ProvenanceRecord(bookId: bookId, field: "cover", source: .manual).save(db)
+            }
+            CoverImageLoader.shared.invalidate(path: gridURL.path)
+        } catch {
+            errorMessage = "Setting cover failed: \(error.localizedDescription)"
+        }
+    }
+
     /// Clears the cover cache AND detaches every book from its now-deleted
     /// cover file. Leaving the dangling paths in place would keep their
     /// cover rank, silently blocking re-extraction from ever restoring a
