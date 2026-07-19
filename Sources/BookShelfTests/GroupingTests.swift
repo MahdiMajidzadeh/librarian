@@ -270,4 +270,51 @@ func groupingTests(_ runner: TestRunner) async {
         expectEqual(r3.title, "plain filename")
         expectEqual(r3.authors, [])
     }
+
+    await runner.run("token similarity: identical, partial, disjoint, empty") {
+        expectEqual(Normalizer.tokenSimilarity("Dune", "Dune"), 1.0)
+        expectEqual(Normalizer.tokenSimilarity("Dune", "dune!"), 1.0, "normalization first")
+        expectEqual(Normalizer.tokenSimilarity("Dune", "Hyperion"), 0.0)
+        expectEqual(Normalizer.tokenSimilarity("", "Dune"), 0.0, "empty operand never matches")
+        let partial = Normalizer.tokenSimilarity("Dune", "Dune Messiah")
+        expect(partial > 0.0 && partial < 1.0,
+               "overlap must score between the extremes, got \(partial)")
+    }
+
+    await runner.run("group method upgrades to a stronger rule, never downgrades") {
+        let database = try AppDatabase.inMemory()
+        let engine = GroupingEngine()
+
+        func assign(_ seed: GroupingSeed) async throws -> Int64 {
+            try await database.writer.write { db in
+                try engine.assignBook(db, seed: seed)
+            }
+        }
+        func method() async throws -> GroupMethod? {
+            try await database.writer.read { try Book.fetchOne($0)?.groupMethod }
+        }
+
+        // First file: nothing to join → new book, method single.
+        let first = try await assign(GroupingSeed(
+            title: "Dune", authors: ["Frank Herbert"], rawStem: "dune"))
+        expectEqual(try await method(), GroupMethod.single)
+
+        // Same embedded metadata, different stem → joins by rule 2, upgrades.
+        let second = try await assign(GroupingSeed(
+            isbn: "9780441172719", title: "Dune", authors: ["Frank Herbert"],
+            rawStem: "herbert dune 1965 retail"))
+        expectEqual(second, first)
+        expectEqual(try await method(), GroupMethod.metadata)
+
+        // Matching ISBN → rule 1 outranks rule 2, upgrades again.
+        let third = try await assign(GroupingSeed(
+            isbn: "9780441172719", rawStem: "completely-different-name"))
+        expectEqual(third, first)
+        expectEqual(try await method(), GroupMethod.isbn)
+
+        // A later filename-tier join must not downgrade the label.
+        let fourth = try await assign(GroupingSeed(rawStem: "dune (1)"))
+        expectEqual(fourth, first)
+        expectEqual(try await method(), GroupMethod.isbn, "weaker rule must not downgrade")
+    }
 }

@@ -128,4 +128,59 @@ func scannerTests(_ runner: TestRunner) async {
             expectEqual(box.events.last?.total, 5)
         }
     }
+
+    await runner.run("default assigner: one book per filename stem when grouping is off") {
+        try await withTempDirectory { dir in
+            _ = try makeFile(dir, "Frank Herbert - Dune.epub")
+            _ = try makeFile(dir, "hyperion.pdf")
+
+            let db = try AppDatabase.inMemory()
+            let scanner = LibraryScanner(database: db)   // no assignBook injected
+            _ = try await scanner.scan(root: dir)
+
+            let books = try await db.writer.read { try Book.fetchAll($0) }
+            expectEqual(books.count, 2, "every file gets its own book")
+            expect(books.contains { $0.title == "Frank Herbert - Dune" },
+                   "fallback title is the raw stem, got \(books.map(\.title))")
+            expect(books.allSatisfy { $0.groupMethod == .single })
+        }
+    }
+
+    await runner.run("folder access: persist/restore round-trip, nil when the folder vanishes") {
+        try await withTempDirectory { dir in
+            let db = try AppDatabase.inMemory()
+            let folder = dir.appendingPathComponent("library", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+            try FolderAccess.persist(url: folder, in: db)
+            let restored = try FolderAccess.restore(from: db)
+            expectEqual(restored?.standardizedFileURL.path, folder.standardizedFileURL.path)
+
+            // Folder gone → nil so the UI can re-prompt (§9).
+            try FileManager.default.removeItem(at: folder)
+            expectNil(try FolderAccess.restore(from: db), "missing folder must not restore")
+
+            // Nothing persisted at all → nil.
+            let fresh = try AppDatabase.inMemory()
+            expectNil(try FolderAccess.restore(from: fresh))
+        }
+    }
+
+    await runner.run("metadata status thresholds: complete needs title+author+year+cover") {
+        var book = Book(title: "Dune", authors: ["Frank Herbert"], year: 1965)
+        book.coverCachePath = "/covers/1.jpg"
+        expectEqual(ScanPipeline.status(for: book), .complete)
+
+        book.coverCachePath = nil
+        expectEqual(ScanPipeline.status(for: book), .partial, "missing cover downgrades")
+
+        let coreOnly = Book(title: "Dune", authors: ["Frank Herbert"])
+        expectEqual(ScanPipeline.status(for: coreOnly), .partial)
+
+        var yearOnly = Book(title: "", authors: [])
+        yearOnly.year = 1965
+        expectEqual(ScanPipeline.status(for: yearOnly), .partial, "any single field is partial")
+
+        expectEqual(ScanPipeline.status(for: Book(title: "", authors: [])), .unresolved)
+    }
 }

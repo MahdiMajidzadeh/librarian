@@ -219,4 +219,58 @@ func renameTests(_ runner: TestRunner) async {
             expect(FileManager.default.fileExists(atPath: url.path), "file untouched")
         }
     }
+
+    await runner.run("template: token value table (author_sort, series_index, authors, isbn)") {
+        var book = Book(title: "Dune", authors: ["Frank Herbert", "Someone Else"],
+                        series: "Dune", seriesIndex: 2, isbn10: "0441172717",
+                        isbn13: "9780441172719")
+        book.authorSort = "herbert, frank"
+
+        func render(_ raw: String) throws -> String? {
+            try RenameTemplate.parse(raw).render(book: book, fileExtension: "epub").name
+        }
+
+        expectEqual(try render("{author_sort}.{ext}"), "Herbert, Frank.epub",
+                    "sort name is re-capitalized")
+        expectEqual(try render("{authors}.{ext}"), "Frank Herbert, Someone Else.epub")
+        expectEqual(try render("{series} {series_index}.{ext}"), "Dune 2.epub",
+                    "whole series index renders without decimals")
+        book.seriesIndex = 2.5
+        expectEqual(try render("{series} {series_index}.{ext}"), "Dune 2.5.epub")
+        expectEqual(try render("{isbn}.{ext}"), "9780441172719.epub",
+                    "isbn13 preferred over isbn10")
+        book.isbn13 = nil
+        expectEqual(try render("{isbn}.{ext}"), "0441172717.epub")
+    }
+
+    await runner.run("planner: missing-on-disk files are excluded with their own status") {
+        let book = Book(id: 1, title: "Dune", authors: ["Frank Herbert"])
+        var missing = BookFile(id: 10, bookId: 1, path: "/lib/gone.epub", format: .epub,
+                               sizeBytes: 1, modifiedAt: Date())
+        missing.missingFlag = true
+        let template = try RenameTemplate.parse(RenameTemplate.defaultRaw)
+        let plan = RenamePlanner.plan(items: [(book, [missing])], template: template,
+                                      fileExists: { _ in false })
+        expectEqual(plan.count, 1)
+        expectEqual(plan[0].status, .missingOnDisk)
+        expectEqual(plan[0].included, false)
+        expectNil(plan[0].proposedName)
+    }
+
+    await runner.run("planner: collision suffix keeps the name within 255 bytes") {
+        let longTitle = String(repeating: "x", count: 300)
+        let book = Book(id: 1, title: longTitle, authors: ["A B"])
+        let file = BookFile(id: 10, bookId: 1, path: "/lib/old.epub", format: .epub,
+                            sizeBytes: 1, modifiedAt: Date())
+        let template = try RenameTemplate.parse(RenameTemplate.defaultRaw)
+        // Every name is taken except suffixed "(2)" candidates.
+        let plan = RenamePlanner.plan(items: [(book, [file])], template: template,
+                                      fileExists: { !$0.contains("(2)") })
+        expectEqual(plan[0].status, .collisionResolved)
+        let name = plan[0].proposedName ?? ""
+        expect(name.contains("(2)"), "suffix applied, got \(name)")
+        expect(name.utf8.count <= 255,
+               "suffixed name must stay within APFS's 255 bytes, got \(name.utf8.count)")
+        expect(name.hasSuffix(".epub"), "extension survives the shortening")
+    }
 }

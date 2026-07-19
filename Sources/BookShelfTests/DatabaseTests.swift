@@ -163,4 +163,45 @@ func databaseTests(_ runner: TestRunner) async {
         expectEqual(Book.sortKey(forAuthors: ["Ursula K. Le Guin"]), "guin, ursula k. le")
         expectNil(Book.sortKey(forAuthors: []))
     }
+
+    await runner.run("recordProvenance upserts and replaces the source per (book, field)") {
+        let db = try AppDatabase.inMemory()
+        let bookId = try await db.writer.write { database -> Int64 in
+            var book = Book(title: "Dune", authors: [])
+            try book.insert(database)
+            try db.recordProvenance(bookId: book.id!, field: "title", source: .embedded, in: database)
+            return book.id!
+        }
+        expectEqual(try db.provenance(forBook: bookId)["title"], .embedded)
+
+        try await db.writer.write { database in
+            try db.recordProvenance(bookId: bookId, field: "title", source: .manual, in: database)
+        }
+        let after = try db.provenance(forBook: bookId)
+        expectEqual(after["title"], .manual, "re-recording replaces, never duplicates")
+        expectEqual(after.count, 1)
+    }
+
+    await runner.run("contentKey is size|mtime-seconds") {
+        expectEqual(BookFile.contentKey(sizeBytes: 100, modifiedAt: Date(timeIntervalSince1970: 5)),
+                    "100|5")
+        expectEqual(BookFile.contentKey(sizeBytes: 100, modifiedAt: Date(timeIntervalSince1970: 5.9)),
+                    "100|5", "sub-second mtime jitter must not look like a change")
+        let file = BookFile(bookId: 1, path: "/x/a.epub", format: .epub,
+                            sizeBytes: 42, modifiedAt: Date(timeIntervalSince1970: 1_000))
+        expectEqual(file.contentKey, "42|1000", "initializer derives the same key")
+    }
+
+    await runner.run("format catalog: extensions and embedded-metadata support") {
+        expectEqual(BookFormat.allExtensions.count, BookFormat.allCases.count)
+        for ext in ["epub", "pdf", "mobi", "azw3", "djvu", "cbz", "cbr", "fb2", "txt"] {
+            expect(BookFormat.allExtensions.contains(ext), "\(ext) missing from catalog")
+        }
+        for format in [BookFormat.epub, .pdf, .mobi, .azw3] {
+            expect(format.supportsEmbeddedMetadata, "\(format) has a parser")
+        }
+        for format in [BookFormat.djvu, .cbz, .cbr, .fb2, .txt] {
+            expect(!format.supportsEmbeddedMetadata, "\(format) has no parser")
+        }
+    }
 }

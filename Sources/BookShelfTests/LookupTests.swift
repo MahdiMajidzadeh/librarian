@@ -271,6 +271,121 @@ func lookupTests(_ runner: TestRunner) async {
         expectEqual(query.title, "Dune")
         expectEqual(query.authors, ["Frank Herbert"])
     }
+
+    await runner.run("transient errors retry, permanent ones do not; empty query skips network") {
+        expect(HTTPStatusError(429).isTransient)
+        expect(HTTPStatusError(500).isTransient)
+        expect(HTTPStatusError(503).isTransient)
+        expect(!HTTPStatusError(404).isTransient)
+        expect(!HTTPStatusError(400).isTransient)
+
+        expect(LookupQuery().isEmpty)
+        expect(!LookupQuery(isbn: "9780441172719").isEmpty)
+        expect(!LookupQuery(title: "Dune").isEmpty)
+        expect(LookupQuery(title: "", authors: ["Frank Herbert"]).isEmpty,
+               "authors alone cannot drive a search")
+
+        let stub = TransportStub()
+        let (service, _, _) = try makeService(stub)
+        let results = try await service.candidates(for: LookupQuery())
+        expectEqual(results.count, 0)
+        expectEqual(stub.calls.count, 0, "empty query must never hit the network")
+    }
+
+    await runner.run("provider no-match is not turned into a later provider's error") {
+        let stub = TransportStub()
+        stub.handler = { request in
+            let url = request.url!.absoluteString
+            if url.contains("openlibrary") { return (Data("{\"docs\": []}".utf8), 200) }
+            return (Data(), 404)  // Google fails permanently
+        }
+        let (service, _, _) = try makeService(stub, googleKey: "test-key")
+        let results = try await service.candidates(for: LookupQuery(title: "Dune"))
+        expectEqual(results.count, 0, "zero hits is a genuine no-match, not an error")
+
+        // When every provider fails, the error does surface.
+        let allFail = TransportStub()
+        allFail.handler = { _ in (Data(), 404) }
+        let (failing, _, _) = try makeService(allFail, googleKey: "test-key")
+        do {
+            _ = try await failing.candidates(for: LookupQuery(title: "Dune"))
+            expect(false, "all-providers-failed must throw")
+        } catch {
+            expectEqual(error as? HTTPStatusError, HTTPStatusError(404))
+        }
+    }
+
+    await runner.run("apply: candidate cover is fetched, cached, and gets provenance") {
+        let database = try AppDatabase.inMemory()
+        let bookId = try await database.writer.write { db -> Int64 in
+            var book = Book(title: "Dune", authors: ["Frank Herbert"], year: 1965)
+            try book.insert(db)
+            return book.id!
+        }
+        let stub = TransportStub()
+        stub.handler = { request in
+            let url = request.url!.absoluteString
+            expect(url.contains("covers.example"), "only the cover URL should be fetched")
+            return (Fixtures.jpegData(), 200)
+        }
+        let (service, _, coversDir) = try makeService(stub, db: database)
+
+        let candidate = LookupCandidate(
+            id: "c", source: .openLibrary, title: "Dune", authors: ["Frank Herbert"],
+            coverURL: URL(string: "https://covers.example/dune-L.jpg"), similarity: 1.0)
+        try await service.apply(candidate, to: bookId, policy: .fillEmpty)
+
+        let book = try await database.writer.read { try Book.fetchOne($0, key: bookId) }
+        let coverPath = book?.coverCachePath
+        expect(coverPath?.hasPrefix(coversDir.path) == true,
+               "cover must land in the cache, got \(coverPath ?? "nil")")
+        expect(FileManager.default.fileExists(atPath: coverPath ?? ""), "grid file written")
+        expectEqual(try database.provenance(forBook: bookId)["cover"], .openLibrary)
+        expectEqual(book?.metadataStatus, .complete,
+                    "title+author+year+cover now all present")
+    }
+
+    await runner.run("google books: largest cover preferred, both ISBN types extracted") {
+        let payload = """
+        {"items": [
+          {"id": "gb2", "volumeInfo": {
+            "title": "Dune", "authors": ["Frank Herbert"],
+            "industryIdentifiers": [
+              {"type": "ISBN_10", "identifier": "0441172717"},
+              {"type": "ISBN_13", "identifier": "9780441172719"}],
+            "imageLinks": {"thumbnail": "http://books.google.com/small.jpg",
+                           "large": "http://books.google.com/large.jpg"}}}
+        ]}
+        """
+        let stub = TransportStub()
+        stub.handler = { request in
+            let url = request.url!.absoluteString
+            if url.contains("openlibrary") { return (Data("{\"docs\": []}".utf8), 200) }
+            return (Data(payload.utf8), 200)
+        }
+        let (service, _, _) = try makeService(stub, googleKey: "test-key")
+        let results = try await service.candidates(for: LookupQuery(title: "Dune"))
+        let top = expectNotNil(results.first, "google candidate expected")
+        expectEqual(top?.coverURL?.absoluteString, "https://books.google.com/large.jpg",
+                    "large beats thumbnail and is upgraded to https")
+        expectEqual(top?.isbn10, "0441172717")
+        expectEqual(top?.isbn13, "9780441172719")
+    }
+
+    await runner.run("open library: docs without a title are dropped") {
+        let payload = """
+        {"docs": [
+          {"key": "/works/OL1W", "title": "Dune", "author_name": ["Frank Herbert"]},
+          {"key": "/works/OL2W", "author_name": ["Anonymous"]}
+        ]}
+        """
+        let stub = TransportStub()
+        stub.handler = { _ in (Data(payload.utf8), 200) }
+        let (service, _, _) = try makeService(stub)
+        let results = try await service.candidates(for: LookupQuery(title: "Dune"))
+        expectEqual(results.count, 1, "the title-less doc must be filtered out")
+        expectEqual(results.first?.title, "Dune")
+    }
 }
 
 final class Counter: @unchecked Sendable {

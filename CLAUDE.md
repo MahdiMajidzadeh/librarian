@@ -17,6 +17,14 @@ features, logic). For **every** development task:
 4. **Always finish by building** (`swift build`; run `swift run
    bookshelf-tests` when Kit logic changed) and smoke-check the app launches.
 
+## Test-case catalog — [test-case.md](test-case.md) is the source of truth
+
+Every test in `Sources/BookShelfTests/` maps 1:1 to a case ID in
+`test-case.md`. **If `test-case.md` is updated, rewrite the tests to match
+it** (add/edit/delete the corresponding `runner.run` blocks, keep test names
+identical to the catalog, re-run until green). Conversely, any test-code
+change must update the catalog in the same commit.
+
 ## Toolchain — read this first
 
 This machine has **no Xcode**, only Command Line Tools (Swift 5.9.2). Consequences:
@@ -36,7 +44,7 @@ This machine has **no Xcode**, only Command Line Tools (Swift 5.9.2). Consequenc
 
 ```bash
 swift build                                # debug build
-swift run bookshelf-tests                  # full test suite (66 tests)
+swift run bookshelf-tests                  # full test suite (108 tests)
 swift run bookshelf-tests --seed <dir>     # generate demo library of fixture books
 Scripts/make-app.sh                        # release build → Librarian.app (unsigned)
 open Librarian.app

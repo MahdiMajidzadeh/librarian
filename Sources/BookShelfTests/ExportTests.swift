@@ -202,4 +202,92 @@ func exportTests(_ runner: TestRunner) async {
         expectEqual(subset.count, 1)
         expectEqual(subset.first?.book.title, "Dune")
     }
+
+    await runner.run("csv per-book: formats deduped, file_count counts every file") {
+        try await withTempDirectory { dir in
+            let database = try AppDatabase.inMemory()
+            _ = try await database.writer.write { db -> Int64 in
+                var book = Book(title: "Dune", authors: ["Frank Herbert"])
+                try book.insert(db)
+                for (i, format) in [BookFormat.epub, .epub, .pdf].enumerated() {
+                    var file = BookFile(bookId: book.id!, path: "/b/dune\(i).\(format.rawValue)",
+                                        format: format, sizeBytes: 100,
+                                        modifiedAt: Date(timeIntervalSince1970: 0))
+                    try file.insert(db)
+                }
+                return book.id!
+            }
+            let url = dir.appendingPathComponent("dedupe.csv")
+            let records = try await ExportRecord.fetch(from: database)
+            try CSVExporter.export(records: records, to: url)
+
+            let text = String(data: try Data(contentsOf: url).dropFirst(3), encoding: .utf8)!
+            let row = text.split(separator: "\r\n")[1]
+            expect(row.contains("epub;pdf"), "duplicate epub collapses in formats: \(row)")
+            expect(row.contains(",3,"), "file_count still counts all three files")
+            expect(row.contains(",300,"), "total_size_bytes sums every file")
+        }
+    }
+
+    await runner.run("json export: grid rendition used when the original cover is gone") {
+        try await withTempDirectory { dir in
+            let database = try AppDatabase.inMemory()
+            let cache = try CoverCache(directory: dir.appendingPathComponent("cache"))
+            let bookId = try await database.writer.write { db -> Int64 in
+                var book = Book(title: "Dune", authors: ["Frank Herbert"])
+                try book.insert(db)
+                return book.id!
+            }
+            let gridURL = try cache.store(imageData: Fixtures.jpegData(), bookId: bookId)
+            try FileManager.default.removeItem(at: cache.originalURL(bookId: bookId))
+            try await database.writer.write { db in
+                var book = try Book.fetchOne(db, key: bookId)!
+                book.coverCachePath = gridURL.path
+                try book.update(db)
+            }
+
+            let exportDir = dir.appendingPathComponent("export")
+            try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+            let url = exportDir.appendingPathComponent("library.json")
+            let records = try await ExportRecord.fetch(from: database)
+            try JSONExporter.export(records: records, to: url, includeCovers: true, coverCache: cache)
+
+            let json = try JSONSerialization.jsonObject(
+                with: Data(contentsOf: url)) as! [String: Any]
+            let book = (json["books"] as! [[String: Any]])[0]
+            expectEqual(book["cover_path"] as? String, "covers/\(bookId).jpg",
+                        "export must fall back to the grid rendition")
+            expect(FileManager.default.fileExists(
+                atPath: exportDir.appendingPathComponent("covers/\(bookId).jpg").path))
+        }
+    }
+
+    await runner.run("rename plan export: every status maps to its label") {
+        try await withTempDirectory { dir in
+            let plan = [
+                RenamePlanItem(id: 1, bookId: 1, bookTitle: "A", currentPath: "/b/a.epub",
+                               proposedName: "A.epub", status: .ready, included: true),
+                RenamePlanItem(id: 2, bookId: 2, bookTitle: "B", currentPath: "/b/b.epub",
+                               proposedName: "B.epub", status: .noOp, included: false),
+                RenamePlanItem(id: 3, bookId: 3, bookTitle: "C", currentPath: "/b/c.epub",
+                               proposedName: "C (2).epub", status: .collisionResolved,
+                               included: true),
+                RenamePlanItem(id: 4, bookId: 4, bookTitle: "D", currentPath: "/b/d.epub",
+                               proposedName: nil, status: .missingTokens(["author", "year"]),
+                               included: false),
+                RenamePlanItem(id: 5, bookId: 5, bookTitle: "E", currentPath: "/b/e.epub",
+                               proposedName: nil, status: .missingOnDisk, included: false),
+            ]
+            let url = dir.appendingPathComponent("statuses.csv")
+            try RenamePlanExporter.exportCSV(plan: plan, to: url)
+            let text = String(data: try Data(contentsOf: url).dropFirst(3), encoding: .utf8)!
+            let lines = text.split(separator: "\r\n").dropFirst()
+            let statuses = lines.map {
+                $0.split(separator: ",", omittingEmptySubsequences: false)[3]
+            }
+            expectEqual(statuses.map(String.init),
+                        ["ready", "no_change", "collision_suffixed",
+                         "excluded_missing_author+year", "excluded_missing_on_disk"])
+        }
+    }
 }

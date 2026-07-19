@@ -21,7 +21,7 @@ Consequences:
 
 ```bash
 swift build                                # debug build
-swift run bookshelf-tests                  # full test suite (80 tests)
+swift run bookshelf-tests                  # full test suite (104 tests)
 swift run bookshelf-tests --seed <dir>     # generate demo library of fixture books
 Scripts/make-app.sh                        # release build → Librarian.app (unsigned)
 .build/debug/BookShelf & sleep 3; kill -0 $!   # smoke-check UI stays alive
@@ -73,6 +73,10 @@ Sources/BookShelfTests/  TestHarness.swift + one *Tests.swift per subsystem
   builder: `Fixtures.seedDemoLibrary(at:)`. Tests use harness helpers
   (`expect`, `expectEqual`, `withTempDirectory`) and register in `main.swift`
   via `await xxxTests(runner)`.
+- **`test-case.md` (repo root) catalogs every test case with a stable ID and
+  is the source of truth**: editing the catalog means rewriting the matching
+  tests; editing tests means updating the catalog in the same commit. Test
+  names in code must equal the catalog's *Test name* column.
 - Grid covers render inside a fixed-frame overlay (`CoverView`); a bare
   `.aspectRatio(.fill)` image leaks natural width into `LazyVGrid` and tiles
   overlap. `CoverImageLoader` cache keys include mtime because cover files
