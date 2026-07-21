@@ -3,7 +3,7 @@ import GRDB
 @testable import LibrarianKit
 import LibrarianFixtures
 
-/// Catalog: SCAN-01 … SCAN-14 (test-case.md).
+/// Catalog: SCAN-01 … SCAN-16 (test-case.md).
 final class ScannerTests: XCTestCase {
     // SCAN-01
     func testInitialScanAddsFiles() throws {
@@ -224,5 +224,57 @@ final class ScannerTests: XCTestCase {
         let afterRescan = try database.writer.read { db in try Book.fetchOne(db)!.coverCachePath }
         XCTAssertEqual(afterRescan, manualPath)
         XCTAssertEqual(try database.provenance(forBook: bookId)["cover"]?.source, .manual)
+    }
+
+    // SCAN-15
+    func testMergeDuringScanIsNotClobbered() throws {
+        let database = try makeDatabase()
+        let coverCache = try makeCoverCache()
+        let root = try makeTempDir()
+        try FixtureFactory.makeEpub(at: root.appendingPathComponent("alpha.epub"),
+                                    spec: .init(title: "Alpha", authors: ["Ann"]))
+        try FixtureFactory.makeEpub(at: root.appendingPathComponent("beta.epub"),
+                                    spec: .init(title: "Beta", authors: ["Bob"]))
+        _ = try LibraryScanner(database: database, coverCache: coverCache).scan(root: root)
+        let ids = try database.fetchLibrary().compactMap(\.book.id)
+        XCTAssertEqual(ids.count, 2)
+
+        // A user merge commits while the next scan is between parsing and
+        // reconciliation (e.g. a watcher-triggered scan is in flight).
+        let commands = GroupCommands(database: database, coverCache: coverCache)
+        let racyScanner = LibraryScanner(
+            database: database, coverCache: coverCache,
+            beforeReconcileHook: { try? commands.merge(bookIds: ids) })
+        _ = try racyScanner.scan(root: root)
+
+        let library = try database.fetchLibrary()
+        XCTAssertEqual(library.count, 1, "the mid-scan merge must survive the scan")
+        XCTAssertEqual(library[0].files.count, 2)
+        XCTAssertEqual(library[0].book.groupMethod, .manual)
+        XCTAssertEqual(Set(library[0].files.compactMap(\.manualGroupId)).count, 1)
+    }
+
+    // SCAN-16
+    func testUngroupDuringScanIsNotClobbered() throws {
+        let database = try makeDatabase()
+        let coverCache = try makeCoverCache()
+        let root = try makeTempDir()
+        // Two files that group automatically by stem into one book.
+        try FixtureFactory.makeEpub(at: root.appendingPathComponent("dune.epub"),
+                                    spec: .init(title: "Dune", authors: ["Frank Herbert"]))
+        try FixtureFactory.makeMobi(at: root.appendingPathComponent("dune_v2.mobi"),
+                                    spec: .init(headerTitle: "Dune"))
+        _ = try LibraryScanner(database: database, coverCache: coverCache).scan(root: root)
+        let bookId = try XCTUnwrap(database.fetchLibrary().first?.book.id)
+
+        let commands = GroupCommands(database: database, coverCache: coverCache)
+        let racyScanner = LibraryScanner(
+            database: database, coverCache: coverCache,
+            beforeReconcileHook: { _ = try? commands.ungroup(bookId: bookId) })
+        _ = try racyScanner.scan(root: root)
+
+        let library = try database.fetchLibrary()
+        XCTAssertEqual(library.count, 2, "the mid-scan ungroup must survive the scan")
+        XCTAssertTrue(library.allSatisfy { $0.files.count == 1 })
     }
 }

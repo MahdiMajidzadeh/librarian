@@ -194,6 +194,15 @@ struct BookDetailView: View {
                             .foregroundStyle(file.missingFlag ? Color.red : .secondary)
                     }
                     Spacer()
+                    if entry.files.count >= 2 {
+                        Button {
+                            model.splitFile(file)
+                        } label: {
+                            Image(systemName: "scissors")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Split this file into its own book")
+                    }
                     if !file.missingFlag {
                         Button {
                             model.open(file: file)

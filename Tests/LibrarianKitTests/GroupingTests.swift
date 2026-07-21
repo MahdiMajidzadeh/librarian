@@ -3,7 +3,7 @@ import GRDB
 @testable import LibrarianKit
 import LibrarianFixtures
 
-/// Catalog: GRP-01 … GRP-17 (test-case.md).
+/// Catalog: GRP-01 … GRP-20 (test-case.md).
 final class GroupingTests: XCTestCase {
     private func identity(
         _ path: String, isbn: String? = nil, title: String? = nil,
@@ -247,5 +247,113 @@ final class GroupingTests: XCTestCase {
         let book = try database.writer.read { db in try Book.fetchOne(db, key: bookId)! }
         XCTAssertNotNil(book.coverCachePath)
         XCTAssertEqual(try database.provenance(forBook: bookId)["cover"]?.source, .manual)
+    }
+
+    // GRP-18
+    func testJunkISBNDoesNotGroup() {
+        // Placeholder ISBN shared by unrelated files: never a grouping key.
+        var groups = GroupingEngine.propose([
+            identity("/x/cooking basics.epub", isbn: "0000000000"),
+            identity("/y/quantum physics.pdf", isbn: "0000000000"),
+        ])
+        XCTAssertEqual(groups.count, 2)
+
+        // Invalid check digit: also rejected.
+        groups = GroupingEngine.propose([
+            identity("/x/cooking basics.epub", isbn: "9780441172718"),
+            identity("/y/quantum physics.pdf", isbn: "9780441172718"),
+        ])
+        XCTAssertEqual(groups.count, 2)
+
+        // Sanity: a checksum-valid ISBN still groups.
+        groups = GroupingEngine.propose([
+            identity("/x/cooking basics.epub", isbn: "9780441172719"),
+            identity("/y/quantum physics.pdf", isbn: "9780441172719"),
+        ])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertTrue(ISBN.isPlausible("0441172717"), "valid ISBN-10 accepted")
+        XCTAssertFalse(ISBN.isPlausible("1111111111"), "monotone ISBN-10 rejected")
+    }
+
+    // GRP-19
+    func testSplitSingleFileCommand() throws {
+        let (scanner, database, coverCache) = try makeScanner()
+        let root = try makeTempDir()
+        try FixtureFactory.makeEpub(
+            at: root.appendingPathComponent("alpha.epub"),
+            spec: .init(title: "Alpha", authors: ["Ann Author"],
+                        coverData: FixtureFactory.tinyJPEG(width: 30, height: 40)))
+        try FixtureFactory.makeEpub(
+            at: root.appendingPathComponent("beta.epub"),
+            spec: .init(title: "Beta", authors: ["Bob Writer"],
+                        coverData: FixtureFactory.tinyJPEG(width: 60, height: 80)))
+        _ = try scanner.scan(root: root)
+        let commands = GroupCommands(database: database, coverCache: coverCache)
+        try commands.merge(bookIds: try database.fetchLibrary().compactMap(\.book.id))
+
+        // Split just beta.epub out of the merged group.
+        let merged = try database.fetchLibrary()[0]
+        let betaFile = try XCTUnwrap(merged.files.first { $0.filename == "beta.epub" })
+        let newBookId = try commands.split(fileId: betaFile.id!)
+
+        var library = try database.fetchLibrary()
+        XCTAssertEqual(library.count, 2)
+        let split = try XCTUnwrap(library.first { $0.book.id == newBookId })
+        let remaining = try XCTUnwrap(library.first { $0.book.id != newBookId })
+        XCTAssertEqual(split.files.map(\.filename), ["beta.epub"])
+        XCTAssertEqual(remaining.files.map(\.filename), ["alpha.epub"])
+        XCTAssertEqual(split.book.groupMethod, .manual)
+        XCTAssertNotEqual(
+            split.files[0].manualGroupId, remaining.files[0].manualGroupId,
+            "the split file gets its own token")
+
+        // The split-out book shows its own embedded identity, incl. cover.
+        XCTAssertEqual(split.book.title, "Beta")
+        XCTAssertEqual(split.book.authors, ["Bob Writer"])
+        XCTAssertNotNil(split.book.coverCachePath)
+
+        // And the decision persists across a rescan (FR-2.4).
+        _ = try scanner.scan(root: root)
+        library = try database.fetchLibrary()
+        XCTAssertEqual(library.count, 2)
+        XCTAssertEqual(
+            try database.fetchLibrary().first { $0.book.id == newBookId }?.book.title, "Beta")
+    }
+
+    // GRP-20
+    func testUngroupSeedsMetadataAndCovers() throws {
+        let (scanner, database, coverCache) = try makeScanner()
+        let root = try makeTempDir()
+        try FixtureFactory.makeEpub(
+            at: root.appendingPathComponent("alpha.epub"),
+            spec: .init(title: "Alpha", authors: ["Ann Author"],
+                        coverData: FixtureFactory.tinyJPEG(width: 30, height: 40)))
+        try FixtureFactory.makeEpub(
+            at: root.appendingPathComponent("beta.epub"),
+            spec: .init(title: "Beta", authors: ["Bob Writer"],
+                        coverData: FixtureFactory.tinyJPEG(width: 60, height: 80)))
+        _ = try scanner.scan(root: root)
+        let commands = GroupCommands(database: database, coverCache: coverCache)
+        let mergedId = try commands.merge(
+            bookIds: try database.fetchLibrary().compactMap(\.book.id))
+
+        let ids = try commands.ungroup(bookId: mergedId)
+        XCTAssertEqual(ids.count, 2)
+
+        let library = try database.fetchLibrary()
+        XCTAssertEqual(library.count, 2)
+        // The new (non-original) book must show its file's own embedded
+        // title, authors, and cover — not a filename guess without a cover.
+        let newBook = try XCTUnwrap(library.first { $0.book.id != mergedId })
+        XCTAssertEqual(newBook.files.map(\.filename), ["beta.epub"])
+        XCTAssertEqual(newBook.book.title, "Beta")
+        XCTAssertEqual(newBook.book.authors, ["Bob Writer"])
+        XCTAssertNotNil(newBook.book.coverCachePath, "ungrouped book must get its own cover")
+        XCTAssertEqual(
+            try database.provenance(forBook: newBook.book.id!)["title"]?.source, .embedded)
+
+        // Stable across a rescan.
+        _ = try scanner.scan(root: root)
+        XCTAssertEqual(try database.fetchLibrary().count, 2)
     }
 }

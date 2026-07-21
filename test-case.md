@@ -39,6 +39,8 @@ test-code change must update this catalog in the same commit). Run with
 | SCAN-12 | `testParseFailureNonFatal` | Corrupt epub → book exists with parseErrorNote, status unresolved (§9) |
 | SCAN-13 | `testScanExtractsCover` | Epub cover lands in the cache; book.coverCachePath set (FR-3.5) |
 | SCAN-14 | `testManualCoverSurvivesRescan` | A manually set cover is not replaced by a rescan |
+| SCAN-15 | `testMergeDuringScanIsNotClobbered` | A merge committed while a scan is in flight survives reconciliation (grouping reads fresh tokens in-transaction) |
+| SCAN-16 | `testUngroupDuringScanIsNotClobbered` | An ungroup committed mid-scan survives; files are not reassigned back together |
 
 ## Grouping — `GroupingTests.swift` (FR-2.x, §9)
 
@@ -61,6 +63,9 @@ test-code change must update this catalog in the same commit). Run with
 | GRP-15 | `testUngroupCommand` | Ungroup: one book per file, unique tokens, original keeps metadata |
 | GRP-16 | `testMergeSurvivesRescan` | Merged book stays merged after a fresh scan (FR-2.4) |
 | GRP-17 | `testCoverFromFileCommand` | setCover(fromFile:) extracts that file's cover, provenance manual |
+| GRP-18 | `testJunkISBNDoesNotGroup` | Placeholder / checksum-invalid embedded ISBNs never act as grouping keys; valid ISBNs still do (§9) |
+| GRP-19 | `testSplitSingleFileCommand` | split(fileId:) pulls one file out of a group into its own book (unique token, rest untouched), seeded with the file's embedded title/authors/cover; persists across rescans |
+| GRP-20 | `testUngroupSeedsMetadataAndCovers` | Ungrouped books show their file's embedded title, authors, and cover with embedded provenance — not a bare filename guess |
 
 ## EPUB parser — `EpubParserTests.swift` (§6.3)
 

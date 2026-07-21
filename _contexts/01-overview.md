@@ -41,7 +41,8 @@ after an explicit preview.
 ## Deliberate deviations from requirements.md (user-requested)
 
 - **No tags feature** — not in the data model, UI, search, filters, or exports.
-- **The detail sidebar is always visible** (no layout shift on selection).
+- **The detail sidebar is always visible at a fixed width (320 pt)** — no
+  layout shift when the selection changes between none / one / many books.
 - The lookup candidate picker shows the **local book side-by-side** with
   online candidates (cover, title, author) for verification.
 - Extra filter: books whose group contains **multiple files of the same

@@ -58,6 +58,40 @@ public enum ISBN {
 
     public static func isISBN13(_ isbn: String) -> Bool { isbn.count == 13 }
 
+    /// True when a normalized ISBN has a valid check digit and is not an
+    /// obvious placeholder (all one digit). Embedded metadata in the wild is
+    /// full of junk ISBNs shared across unrelated files — using one as a
+    /// grouping key would merge strangers (§9), so grouping requires this.
+    public static func isPlausible(_ isbn: String) -> Bool {
+        let chars = Array(isbn)
+        guard Set(chars).count > 1 else { return false } // "0000000000" & co.
+
+        if chars.count == 13 {
+            guard chars.allSatisfy(\.isNumber) else { return false }
+            let sum = chars.enumerated().reduce(0) { total, pair in
+                total + pair.element.wholeNumberValue! * (pair.offset % 2 == 0 ? 1 : 3)
+            }
+            return sum % 10 == 0
+        }
+        if chars.count == 10 {
+            var sum = 0
+            for (index, char) in chars.enumerated() {
+                let value: Int
+                if char == "X" {
+                    guard index == 9 else { return false }
+                    value = 10
+                } else if char.isNumber {
+                    value = char.wholeNumberValue!
+                } else {
+                    return false
+                }
+                sum += value * (10 - index)
+            }
+            return sum % 11 == 0
+        }
+        return false
+    }
+
     /// Assigns a normalized ISBN to the right slot of the metadata struct.
     public static func assign(_ raw: String, to metadata: inout BookMetadata) {
         guard let isbn = normalize(raw) else { return }

@@ -29,10 +29,23 @@ public struct ScanSummary: Sendable, Equatable {
 public final class LibraryScanner: Sendable {
     private let database: AppDatabase
     private let coverCache: CoverCache
+    /// Test seam: runs after parsing, right before the reconciliation
+    /// transaction — lets tests interleave user actions (merge/ungroup) with
+    /// an in-flight scan.
+    let beforeReconcileHook: (@Sendable () -> Void)?
 
-    public init(database: AppDatabase, coverCache: CoverCache) {
+    public convenience init(database: AppDatabase, coverCache: CoverCache) {
+        self.init(database: database, coverCache: coverCache, beforeReconcileHook: nil)
+    }
+
+    init(
+        database: AppDatabase,
+        coverCache: CoverCache,
+        beforeReconcileHook: (@Sendable () -> Void)?
+    ) {
         self.database = database
         self.coverCache = coverCache
+        self.beforeReconcileHook = beforeReconcileHook
     }
 
     // MARK: - Disk enumeration
@@ -126,71 +139,81 @@ public final class LibraryScanner: Sendable {
             progress?(ScanProgress(processed: processed, total: diskFiles.count))
         }
 
-        // Identities for grouping: every on-disk file plus known missing files
-        // (their book assignment must stay stable across rescans).
-        var identities: [FileIdentity] = []
         var metadataByPath: [String: MetadataExtractor.Result] = [:]
-
         for parsed in parsedFiles {
-            let stem = (parsed.disk.path as NSString).lastPathComponent
-            let stemNoExt = (stem as NSString).deletingPathExtension
-            let identity: FileIdentity
             if let extraction = parsed.extraction {
-                let m = extraction.metadata
-                identity = FileIdentity(
-                    path: parsed.disk.path,
-                    format: parsed.disk.format,
-                    stem: stemNoExt,
-                    isbn: m.isbn13 ?? m.isbn10,
-                    titleKey: m.title.map(Normalizer.key),
-                    authorKey: m.authors.isEmpty ? nil : Normalizer.authorSetKey(m.authors),
-                    manualGroupId: parsed.existing?.manualGroupId)
                 metadataByPath[parsed.disk.path] = extraction
-            } else if let known = parsed.existing {
-                identity = FileIdentity(
-                    path: parsed.disk.path,
-                    format: parsed.disk.format,
-                    stem: stemNoExt,
-                    isbn: known.embeddedIsbn,
-                    titleKey: known.embeddedTitleKey,
-                    authorKey: known.embeddedAuthorKey,
-                    manualGroupId: known.manualGroupId)
-            } else {
-                continue // unreachable
             }
-            identities.append(identity)
-        }
-        let missingFiles = existing.filter { !diskPaths.contains($0.path) }
-        for file in missingFiles {
-            let stemNoExt = ((file.path as NSString).lastPathComponent as NSString)
-                .deletingPathExtension
-            identities.append(FileIdentity(
-                path: file.path,
-                format: file.format,
-                stem: stemNoExt,
-                isbn: file.embeddedIsbn,
-                titleKey: file.embeddedTitleKey,
-                authorKey: file.embeddedAuthorKey,
-                manualGroupId: file.manualGroupId))
         }
 
-        let groups = GroupingEngine.propose(identities)
-        summary.markedMissing = missingFiles.filter { !$0.missingFlag }.count
+        beforeReconcileHook?()
 
-        // Everything below mutates the database in one transaction. Covers are
-        // written to the cache after the transaction (file I/O outside write).
+        // Identity building, grouping, and reconciliation all happen inside
+        // ONE write transaction over freshly read rows. Grouping must see the
+        // manual merge/ungroup tokens as they are NOW — parsing can take a
+        // while, and a user decision committed mid-scan used to be reconciled
+        // against the pre-scan snapshot, shuffling files into wrong books.
         struct PendingCover {
             var bookId: Int64
             var data: Data
         }
         var pendingCovers: [PendingCover] = []
+        var markedMissing = 0
 
         try database.writer.write { db in
+            let freshFiles = try BookFile.fetchAll(db)
+            let freshByPath = Dictionary(uniqueKeysWithValues: freshFiles.map { ($0.path, $0) })
+
+            // Identities for grouping: every on-disk file plus known missing
+            // files (their book assignment must stay stable across rescans).
+            var identities: [FileIdentity] = []
+            for parsed in parsedFiles {
+                let filename = (parsed.disk.path as NSString).lastPathComponent
+                let stemNoExt = (filename as NSString).deletingPathExtension
+                let fresh = freshByPath[parsed.disk.path] ?? parsed.existing
+                if let extraction = parsed.extraction {
+                    let m = extraction.metadata
+                    identities.append(FileIdentity(
+                        path: parsed.disk.path,
+                        format: parsed.disk.format,
+                        stem: stemNoExt,
+                        isbn: m.isbn13 ?? m.isbn10,
+                        titleKey: m.title.map(Normalizer.key),
+                        authorKey: m.authors.isEmpty ? nil : Normalizer.authorSetKey(m.authors),
+                        manualGroupId: fresh?.manualGroupId))
+                } else if let known = fresh {
+                    identities.append(FileIdentity(
+                        path: parsed.disk.path,
+                        format: parsed.disk.format,
+                        stem: stemNoExt,
+                        isbn: known.embeddedIsbn,
+                        titleKey: known.embeddedTitleKey,
+                        authorKey: known.embeddedAuthorKey,
+                        manualGroupId: known.manualGroupId))
+                }
+            }
+            let missingFiles = freshFiles.filter { !diskPaths.contains($0.path) }
+            for file in missingFiles {
+                let stemNoExt = ((file.path as NSString).lastPathComponent as NSString)
+                    .deletingPathExtension
+                identities.append(FileIdentity(
+                    path: file.path,
+                    format: file.format,
+                    stem: stemNoExt,
+                    isbn: file.embeddedIsbn,
+                    titleKey: file.embeddedTitleKey,
+                    authorKey: file.embeddedAuthorKey,
+                    manualGroupId: file.manualGroupId))
+            }
+            markedMissing = missingFiles.filter { !$0.missingFlag }.count
+
+            let groups = GroupingEngine.propose(identities)
+
             let books = try Book.fetchAll(db)
             let booksById = Dictionary(uniqueKeysWithValues: books.compactMap { book in
                 book.id.map { ($0, book) }
             })
-            var filesByPath = Dictionary(uniqueKeysWithValues: try BookFile.fetchAll(db).map { ($0.path, $0) })
+            var filesByPath = freshByPath
             let diskByPath = Dictionary(
                 uniqueKeysWithValues: parsedFiles.map { ($0.disk.path, $0.disk) })
 
@@ -300,6 +323,7 @@ public final class LibraryScanner: Sendable {
 
             try self.database.deleteOrphanBooks(db)
         }
+        summary.markedMissing = markedMissing
 
         // Store covers and point books at them.
         for pending in pendingCovers {

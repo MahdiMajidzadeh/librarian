@@ -5,13 +5,15 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             mainPane
                 .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
-            // Detail sidebar is ALWAYS visible (user deviation: no layout
-            // shift when selecting/deselecting).
+            Divider()
+            // Detail sidebar is ALWAYS visible at a FIXED width (user
+            // deviation: no layout shift when the selection changes between
+            // none / one book / multiple books).
             detailSidebar
-                .frame(minWidth: 290, idealWidth: 320, maxWidth: 420)
+                .frame(width: 320)
         }
         .toolbar { toolbarContent }
         .searchable(text: $model.searchText, prompt: "Title, author, series, ISBN, filename")
@@ -89,13 +91,18 @@ struct ContentView: View {
     // MARK: - Filter bar (§6.6 FR-6.3)
 
     private var filterBar: some View {
-        HStack(spacing: 12) {
+        // Fixed-height bar of pure-SwiftUI controls. Checkbox toggles
+        // (AppKit-backed) used to detach and blow the bar up to half the
+        // window on first layout; button-style toggles inside an exact-height
+        // frame cannot.
+        HStack(spacing: 10) {
             Picker("Format", selection: $model.formatFilter) {
                 Text("All Formats").tag(BookFormat?.none)
                 ForEach(BookFormat.allCases, id: \.self) { format in
                     Text(format.badge).tag(BookFormat?.some(format))
                 }
             }
+            .labelsHidden()
             .fixedSize()
 
             Picker("Status", selection: $model.statusFilter) {
@@ -103,25 +110,26 @@ struct ContentView: View {
                     Text(status.rawValue).tag(status)
                 }
             }
+            .labelsHidden()
             .fixedSize()
 
             Toggle("Missing", isOn: $model.missingOnlyFilter)
-                .toggleStyle(.checkbox)
                 .help("Show only books with files missing on disk")
             Toggle("Auto-grouped", isOn: $model.autoGroupedFilter)
-                .toggleStyle(.checkbox)
                 .help("Show only books grouped by filename similarity (review)")
             Toggle("Duplicate formats", isOn: $model.duplicateFormatFilter)
-                .toggleStyle(.checkbox)
                 .help("Show only books with more than one file of the same format")
 
-            Spacer()
+            Spacer(minLength: 0)
 
+            Text("Sort")
+                .foregroundStyle(.secondary)
             Picker("Sort", selection: $model.sortField) {
                 ForEach(SortField.allCases) { field in
                     Text(field.rawValue).tag(field)
                 }
             }
+            .labelsHidden()
             .fixedSize()
             Button {
                 model.sortAscending.toggle()
@@ -131,8 +139,12 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Toggle sort direction")
         }
+        .toggleStyle(.button)
+        .controlSize(.small)
+        .lineLimit(1)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .frame(height: 34)
+        .clipped()
     }
 
     // MARK: - Status bar

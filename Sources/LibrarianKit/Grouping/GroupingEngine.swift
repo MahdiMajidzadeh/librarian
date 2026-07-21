@@ -24,7 +24,9 @@ public struct FileIdentity: Sendable, Hashable {
         self.path = path
         self.format = format
         self.stem = stem
-        self.isbn = isbn
+        // Junk/placeholder ISBNs are shared across unrelated files in the
+        // wild; only checksum-valid ISBNs may act as grouping keys (§9).
+        self.isbn = isbn.flatMap { ISBN.isPlausible($0) ? $0 : nil }
         self.titleKey = titleKey?.isEmpty == true ? nil : titleKey
         self.authorKey = authorKey?.isEmpty == true ? nil : authorKey
         self.manualGroupId = manualGroupId

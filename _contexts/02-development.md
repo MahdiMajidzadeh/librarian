@@ -18,7 +18,7 @@
 
 ```bash
 swift build                          # debug build (all targets)
-swift test                           # full XCTest suite (121 tests)
+swift test                           # full XCTest suite (126 tests)
 swift run librarian-seed <dir>       # generate a demo ebook library
 Scripts/make-app.sh                  # release build → Librarian.app (with icon)
 open Librarian.app

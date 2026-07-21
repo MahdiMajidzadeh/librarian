@@ -19,8 +19,13 @@
   stripped, author agreement required).
 - Books grouped only by filename show a purple "auto-grouped" link chip and
   can be filtered for review.
-- **Merge** (multi-select → "Merge Into One Book") and **Ungroup** (detail
-  sidebar / context menu → one book per file). Both persist across rescans.
+- **Merge** (multi-select → "Merge Into One Book"), **Ungroup** (detail
+  sidebar / context menu → one book per file), and **per-file split** (the
+  scissors button on any file row in the detail sidebar → that one file
+  becomes its own book, the rest of the group is untouched). All persist
+  across rescans. Books created by ungroup/split are seeded from their file's
+  own embedded metadata and cover, so they show a proper title and cover
+  immediately (filename guess only as fallback).
 
 ## Metadata & covers (§6.3)
 
@@ -71,11 +76,15 @@
 - Search-as-you-type: title, author, series, ISBN, filename.
 - Filters: format, metadata status, missing, auto-grouped, **duplicate
   formats** (groups with >1 file of one format). Sorts: title, author, year,
-  date added, file size (asc/desc).
+  date added, file size (asc/desc). The filter bar is a fixed-height (34 pt)
+  row of pure-SwiftUI controls — button-style toggles, not AppKit checkbox
+  toggles, which detached from the row and inflated the bar on first layout.
 - Status chips: unresolved (orange ?), auto-grouped (purple link), missing
   (red triangle), parse error (grey note).
-- Multi-select (⌘/⇧ in grid, native in table) → always-visible right sidebar
-  becomes the bulk-action panel: resolve, rename, merge, export selection.
+- Multi-select (⌘/⇧ in grid, native in table) → the right sidebar becomes the
+  bulk-action panel: resolve, rename, merge, export selection. The sidebar is
+  always visible and **fixed at 320 pt** (plain HStack, not HSplitView), so
+  swapping between placeholder / detail / multi-select never shifts layout.
 - Double-click opens the book's first present file in the default app;
   context menu offers open/reveal/resolve/edit/merge/ungroup/rename.
 

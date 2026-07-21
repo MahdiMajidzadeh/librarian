@@ -27,10 +27,14 @@ their rows, so their books survive.
    `DiskFile(path, format, size, mtime)`.
 2. Classify against DB rows by path: unchanged (size+mtime equal → keys
    reused, no parse), changed/new (→ `MetadataExtractor.extract`).
-3. Build `FileIdentity` for every on-disk file **and** every DB file now
-   missing (their group assignment must stay stable), then run
-   `GroupingEngine.propose`.
-4. In one write transaction, per proposed group:
+3. **Inside one write transaction over freshly read rows**: build
+   `FileIdentity` for every on-disk file and every DB file now missing
+   (their group assignment must stay stable), then run
+   `GroupingEngine.propose`. Identities/grouping must never be computed from
+   the pre-scan snapshot — parsing takes time, and a merge/ungroup committed
+   mid-scan would be reconciled against stale tokens, shuffling files into
+   wrong books (SCAN-15/16 guard this).
+4. In the same transaction, per proposed group:
    - target book = existing book owning the most member files (stable),
      else a new book seeded from merged embedded metadata / filename guess;
    - fill **only empty** fields from embedded data; record provenance;
@@ -49,7 +53,10 @@ Union-find over file identities with staged edges:
 
 1. **manual** — files sharing a `manualGroupId` union; manually tokened files
    never take part in automatic edges (so a singleton token = pinned split).
-2. **isbn** — identical normalized embedded ISBN.
+2. **isbn** — identical normalized embedded ISBN, but only when it is
+   *plausible* (`ISBN.isPlausible`: valid check digit, not all-one-digit).
+   Real-world files share placeholder/junk ISBNs, which must never merge
+   strangers (§9, GRP-18).
 3. **metadata** — same normalized title key + order-independent author-set key.
 4. **filename** — same stem key (separators collapsed, `(…)`/noise words like
    v2/final/ocr stripped). Inside a stem bucket, files with *conflicting*
@@ -63,7 +70,13 @@ used** (`filename` → shown as auto-grouped), else single.
 `GroupCommands` implements the user operations: `merge` (survivor = most
 complete book, fill-empty from the rest, shared token on all files),
 `ungroup` (unique token per file, original book keeps the first file and its
-metadata), `setCover(fromFile:)` / `setCover(imageData:)` (manual provenance).
+metadata), `split(fileId:)` (one file out of its group into its own book,
+unique token, siblings untouched), and `setCover(fromFile:)` /
+`setCover(imageData:)` (manual provenance). Books created by ungroup/split
+are seeded via `FileSeed`: the file is re-parsed for embedded metadata and
+cover (provenance `embedded`), with filename inference as fallback
+(provenance `filename`) — parsing happens outside the write transaction,
+covers are stored after it.
 
 ## Metadata (`LibrarianKit/Metadata`)
 

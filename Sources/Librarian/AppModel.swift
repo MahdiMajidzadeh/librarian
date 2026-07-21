@@ -405,6 +405,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Splits one file out of a group into its own book (FR-2.4).
+    func splitFile(_ file: BookFile) {
+        guard let fileId = file.id else { return }
+        do {
+            let newBookId = try groupCommands.split(fileId: fileId)
+            reload()
+            selection = [newBookId]
+            statusMessage = "\(file.filename) is now its own book"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func setCover(for entry: LibraryEntry, fromFile file: BookFile) {
         guard let bookId = entry.book.id else { return }
         do {

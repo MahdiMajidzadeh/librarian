@@ -59,45 +59,44 @@ public struct GroupCommands: Sendable {
         }
     }
 
-    // MARK: - Ungroup
+    // MARK: - Ungroup / split
 
     /// Splits a book so every file becomes its own book (FR-2.4). Each file
     /// receives a unique manual token, so automatic grouping never re-merges
-    /// them. The original book keeps its first file and all its metadata.
+    /// them. The original book keeps its first file and all its metadata;
+    /// every new book is seeded from its file's own embedded metadata and
+    /// cover, so it shows a proper title and cover immediately.
     /// Returns the ids of all resulting books.
     @discardableResult
     public func ungroup(bookId: Int64) throws -> [Int64] {
-        try database.writer.write { db in
-            guard var original = try Book.fetchOne(db, key: bookId) else {
-                throw GroupError.booksNotFound
-            }
-            let files = try BookFile
+        let files = try database.writer.read { db in
+            try BookFile
                 .filter(Column("bookId") == bookId)
                 .order(Column("path"))
                 .fetchAll(db)
-            guard files.count >= 2 else { return [bookId] }
+        }
+        guard files.count >= 2 else { return [bookId] }
+        // Parse embedded metadata/covers outside the write transaction.
+        let seeds = files.map(FileSeed.init(file:))
 
+        var pendingCovers: [(bookId: Int64, data: Data)] = []
+        let resultIds: [Int64] = try database.writer.write { db in
+            guard var original = try Book.fetchOne(db, key: bookId) else {
+                throw GroupError.booksNotFound
+            }
             var resultIds: [Int64] = [bookId]
 
             for (index, file) in files.enumerated() {
-                var row = file
+                var row = try BookFile.fetchOne(db, key: file.id!) ?? file
                 row.manualGroupId = "manual-\(UUID().uuidString)"
                 if index == 0 {
                     try row.save(db)
                     continue
                 }
-                // New book seeded from the file's own identity.
-                let stem = (row.filename as NSString).deletingPathExtension
-                let guess = FilenameInference.guess(fromStem: stem)
-                var book = Book(
-                    title: guess.title,
-                    authors: guess.author.map { [$0] } ?? [])
-                book.groupMethod = .manual
-                book.refreshMetadataStatus()
-                try book.insert(db)
-                let newId = book.id!
-                try Provenance(bookId: newId, field: "title", source: .filename).save(db)
-
+                let newId = try Self.insertBook(from: seeds[index], db: db)
+                if let cover = seeds[index].extraction?.metadata.coverData {
+                    pendingCovers.append((newId, cover))
+                }
                 row.bookId = newId
                 try row.save(db)
                 resultIds.append(newId)
@@ -107,6 +106,109 @@ public struct GroupCommands: Sendable {
             original.updatedAt = Date()
             try original.save(db)
             return resultIds
+        }
+        try applyCovers(pendingCovers)
+        return resultIds
+    }
+
+    /// Splits ONE file out of its group into its own book (FR-2.4): the file
+    /// gets a unique manual token so it never re-merges automatically, and
+    /// its new book is seeded from the file's embedded metadata and cover.
+    /// The rest of the group is untouched. Returns the new book's id.
+    @discardableResult
+    public func split(fileId: Int64) throws -> Int64 {
+        guard let file = try database.writer.read({ db in
+            try BookFile.fetchOne(db, key: fileId)
+        }) else {
+            throw GroupError.booksNotFound
+        }
+        let siblingCount = try database.writer.read { db in
+            try BookFile.filter(Column("bookId") == file.bookId).fetchCount(db)
+        }
+        guard siblingCount >= 2 else { return file.bookId }
+
+        let seed = FileSeed(file: file)
+        var pendingCovers: [(bookId: Int64, data: Data)] = []
+        let newId: Int64 = try database.writer.write { db in
+            let newId = try Self.insertBook(from: seed, db: db)
+            if let cover = seed.extraction?.metadata.coverData {
+                pendingCovers.append((newId, cover))
+            }
+            var row = try BookFile.fetchOne(db, key: fileId) ?? file
+            row.bookId = newId
+            row.manualGroupId = "manual-\(UUID().uuidString)"
+            try row.save(db)
+            try self.database.deleteOrphanBooks(db)
+            return newId
+        }
+        try applyCovers(pendingCovers)
+        return newId
+    }
+
+    // MARK: - Seeding new books from a file
+
+    /// Everything needed to give a split-out file a proper book identity:
+    /// its embedded metadata (when the file is readable) plus the filename
+    /// guess as fallback.
+    struct FileSeed {
+        var extraction: MetadataExtractor.Result?
+        var guess: FilenameInference.Guess
+
+        init(file: BookFile) {
+            let stem = (file.filename as NSString).deletingPathExtension
+            guess = FilenameInference.guess(fromStem: stem)
+            if !file.missingFlag, FileManager.default.fileExists(atPath: file.path) {
+                extraction = MetadataExtractor.extract(url: file.url, format: file.format)
+            }
+        }
+    }
+
+    /// Inserts a book built from the seed and records field provenance.
+    private static func insertBook(from seed: FileSeed, db: Database) throws -> Int64 {
+        let m = seed.extraction?.metadata ?? BookMetadata()
+        var book = Book(
+            title: m.title ?? seed.guess.title,
+            authors: !m.authors.isEmpty
+                ? m.authors
+                : (seed.guess.author.map { [$0] } ?? []))
+        book.series = m.series
+        book.seriesIndex = m.seriesIndex
+        book.publisher = m.publisher
+        book.year = m.year
+        book.language = m.language
+        book.isbn10 = m.isbn10
+        book.isbn13 = m.isbn13
+        book.bookDescription = m.description
+        book.groupMethod = .manual
+        book.parseErrorNote = seed.extraction?.parseErrorNote
+        book.refreshMetadataStatus()
+        try book.insert(db)
+        let bookId = book.id!
+
+        try Provenance(
+            bookId: bookId, field: "title",
+            source: m.title != nil ? .embedded : .filename).save(db)
+        if !book.authors.isEmpty {
+            try Provenance(
+                bookId: bookId, field: "authors",
+                source: !m.authors.isEmpty ? .embedded : .filename).save(db)
+        }
+        for field in m.populatedFields where !["title", "authors", "cover"].contains(field) {
+            try Provenance(bookId: bookId, field: field, source: .embedded).save(db)
+        }
+        return bookId
+    }
+
+    /// Stores extracted covers and points the new books at them.
+    private func applyCovers(_ pending: [(bookId: Int64, data: Data)]) throws {
+        for (bookId, data) in pending {
+            let path = try coverCache.store(data, forBookId: bookId)
+            try database.writer.write { db in
+                try db.execute(
+                    sql: "UPDATE book SET coverCachePath = ? WHERE id = ?",
+                    arguments: [path, bookId])
+                try Provenance(bookId: bookId, field: "cover", source: .embedded).save(db)
+            }
         }
     }
 
