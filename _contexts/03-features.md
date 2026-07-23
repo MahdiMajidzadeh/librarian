@@ -11,6 +11,12 @@
   a second no-change rescan parses nothing.
 - Deleted files turn grey ("missing" chip); *Purge Missing Entries* removes
   them explicitly. Folder watching (FSEvents, debounced) auto-rescans.
+- **Catalog backup in the folder**: a hidden `.librarian.sqlite` copy at the
+  library root, refreshed (debounced) after every change and on quit. Choosing
+  a folder with an empty catalog auto-restores from it — metadata, grouping,
+  and rename history survive a wiped Application Support or a move to a new
+  Mac (file paths are rebased to the new location; covers re-extract on the
+  next scan).
 
 ## Grouping (§6.2)
 
@@ -55,8 +61,7 @@
   (Unicode preserved, truncation on character boundaries).
 - **Mandatory preview sheet**: current → new per file, include checkboxes,
   collision rows flagged (auto " (2)" suffix), no-op rows dimmed, excluded
-  rows listed with reasons (missing token / missing file).
-- Execution: same-directory `moveItem`, DB path updated per file, journal row
+  rows listed with reasons (missing token / missing file).- Execution: same-directory `moveItem`, DB path updated per file, journal row
   per file. **Undo Last Rename Batch** (⌥⌘Z, also in Actions menu) restores
   the most recent batch; the journal survives restarts.
 

@@ -41,7 +41,7 @@ gracefully (see `FolderAccess`).
 
 ```bash
 swift build                          # debug build
-swift test                           # full suite (126 tests, all offline)
+swift test                           # full suite (133 tests, all offline)
 swift run librarian-seed <dir>       # generate demo library for manual testing
 Scripts/make-app.sh                  # release build → Librarian.app (icon.png → icns)
 open Librarian.app

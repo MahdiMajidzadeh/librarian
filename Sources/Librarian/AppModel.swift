@@ -55,6 +55,8 @@ final class AppModel: ObservableObject {
     let groupCommands: GroupCommands
     let renameExecutor: RenameExecutor
     private var watcher: FolderWatcher?
+    private var backupDebounce: Task<Void, Never>?
+    private var terminateObserver: NSObjectProtocol?
 
     // Library state.
     @Published var entries: [LibraryEntry] = []
@@ -109,6 +111,15 @@ final class AppModel: ObservableObject {
         libraryPath = try? database.setting(SettingKey.libraryPath)
         reload()
         startWatcherIfPossible()
+        // Final flush of the in-folder catalog copy on quit (NFR: no data loss).
+        terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.backupDebounce?.cancel()
+                self?.backupNow(synchronous: true)
+            }
+        }
     }
 
     // MARK: - Library loading
@@ -194,6 +205,11 @@ final class AppModel: ObservableObject {
         panel.message = "Choose your books folder. Files are read in place and never moved."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
+            // Empty catalog + a saved copy in the folder → seed from it, so
+            // metadata survives a wiped Application Support or a new Mac.
+            if try LibraryBackup.restoreIfNeeded(into: database, root: url, coverCache: coverCache) {
+                statusMessage = "Catalog restored from the copy saved in this folder"
+            }
             try FolderAccess.persist(url, in: database)
             libraryPath = url.path
             startWatcherIfPossible()
@@ -239,6 +255,9 @@ final class AppModel: ObservableObject {
                             summary.added, summary.updated, summary.markedMissing,
                             summary.duration)
                         self.reload()
+                        if summary.added + summary.updated + summary.markedMissing > 0 {
+                            self.scheduleBackup()
+                        }
                     case .failure(let error):
                         self.errorMessage = error.localizedDescription
                     }
@@ -264,8 +283,40 @@ final class AppModel: ObservableObject {
             try database.purgeMissingFiles()
             reload()
             statusMessage = "Missing entries purged"
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - In-folder catalog backup
+
+    /// Debounced refresh of the hidden catalog copy in the library folder
+    /// (`.librarian.sqlite`); called after every catalog mutation and after
+    /// scans that changed something. A no-change rescan writes nothing, so
+    /// the FSEvents watcher never loops on the backup file itself.
+    func scheduleBackup() {
+        backupDebounce?.cancel()
+        backupDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.backupNow()
+        }
+    }
+
+    /// Best-effort: a failed backup never interrupts the user. The quit path
+    /// runs synchronously so the write finishes before the process exits.
+    private func backupNow(synchronous: Bool = false) {
+        guard let resolved = (try? FolderAccess.resolve(from: database)) ?? nil else { return }
+        let database = database
+        if synchronous {
+            defer { resolved.stopAccessing() }
+            try? LibraryBackup.write(from: database, toRoot: resolved.url)
+        } else {
+            Task.detached(priority: .utility) {
+                defer { resolved.stopAccessing() }
+                try? LibraryBackup.write(from: database, toRoot: resolved.url)
+            }
         }
     }
 
@@ -285,6 +336,7 @@ final class AppModel: ObservableObject {
                 switch outcome {
                 case .applied:
                     reload()
+                    scheduleBackup()
                 case .noMatch:
                     statusMessage = "No online match found"
                 case .failed(let message):
@@ -323,6 +375,7 @@ final class AppModel: ObservableObject {
             do {
                 _ = try await lookup.apply(candidate: candidate, toBookId: entry.id)
                 reload()
+                scheduleBackup()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -373,6 +426,7 @@ final class AppModel: ObservableObject {
                 try database.recordProvenance(bookId: bookId, fields: changed, source: .manual)
             }
             reload()
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -388,6 +442,7 @@ final class AppModel: ObservableObject {
             reload()
             selection = [survivor]
             statusMessage = "Merged \(ids.count) books"
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -400,6 +455,7 @@ final class AppModel: ObservableObject {
             reload()
             selection = Set(ids)
             statusMessage = "Split into \(ids.count) books"
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -413,6 +469,7 @@ final class AppModel: ObservableObject {
             reload()
             selection = [newBookId]
             statusMessage = "\(file.filename) is now its own book"
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -424,6 +481,7 @@ final class AppModel: ObservableObject {
             if try groupCommands.setCover(bookId: bookId, fromFile: file) {
                 reload()
                 statusMessage = "Cover updated from \(file.filename)"
+                scheduleBackup()
             } else {
                 statusMessage = "\(file.filename) has no embedded cover"
             }
@@ -438,6 +496,7 @@ final class AppModel: ObservableObject {
             let data = try Data(contentsOf: url)
             try groupCommands.setCover(bookId: bookId, imageData: data)
             reload()
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -464,6 +523,7 @@ final class AppModel: ObservableObject {
         do {
             let result = try renameExecutor.execute(rows: rows)
             reload()
+            scheduleBackup()
             if result.failed.isEmpty {
                 statusMessage = "Renamed \(result.renamed) files (undo available)"
             } else {
@@ -483,6 +543,7 @@ final class AppModel: ObservableObject {
         do {
             let result = try renameExecutor.undoLastBatch()
             reload()
+            scheduleBackup()
             if result.failed.isEmpty {
                 statusMessage = "Reverted \(result.reverted) files"
             } else {

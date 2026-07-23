@@ -21,6 +21,18 @@ test-code change must update this catalog in the same commit). Run with
 | DB-08 | `testSortKeyGeneration` | "The Title"→"title"; "Frank Herbert"→"herbert, frank"; single-word names pass through |
 | DB-09 | `testRefreshMetadataStatus` | Status transitions: unresolved → partial (title+author) → complete (+year/ISBN) |
 
+## In-folder backup — `BackupTests.swift`
+
+| ID | Test name | Verifies |
+|---|---|---|
+| BAK-01 | `testBackupWritesHiddenFileAtRoot` | `write()` creates hidden `.librarian.sqlite` at the root containing every catalog row |
+| BAK-02 | `testBackupRefreshReplacesCopy` | A second `write()` after edits replaces the copy (new data present); temp file cleaned up |
+| BAK-03 | `testRestoreSkipsNonEmptyCatalog` | `restoreIfNeeded` returns false and changes nothing when the live catalog already has books |
+| BAK-04 | `testRestoreIntoEmptyCatalog` | Empty live DB + folder copy → books, files, provenance, rename journal, and settings restored |
+| BAK-05 | `testRestoreRebasesMovedRoot` | Backup written under root A, restored under root B → file paths + rename journal rebased to B, `library.path` = B, stale bookmark cleared |
+| BAK-06 | `testRestoreClearsDanglingCoverPaths` | `coverCachePath` nulled when the cached grid file is absent locally, kept when it exists |
+| BAK-07 | `testBackupFileNotScanned` | A scan of a root containing `.librarian.sqlite` never catalogs the backup file (hidden-file rule) |
+
 ## Scanning — `ScannerTests.swift` (FR-1.x)
 
 | ID | Test name | Verifies |

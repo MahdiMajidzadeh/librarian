@@ -21,6 +21,26 @@ GRDB 7 over SQLite in `~/Library/Application Support/Librarian/librarian.sqlite`
 Books with zero files are deleted (`deleteOrphanBooks`); missing files keep
 their rows, so their books survive.
 
+### In-folder backup (`LibraryBackup`)
+
+A hidden self-contained copy of the catalog, `.librarian.sqlite`, lives at the
+**library root** so metadata/grouping/rename history travel with the books:
+
+- `write(from:toRoot:)` — SQLite online backup into `.librarian.sqlite.tmp`,
+  stamps the current root path inside the copy (`backup.libraryRoot` setting),
+  then swaps it in atomically. Hidden → never scanned (BAK-07/SCAN-02).
+- `restoreIfNeeded(into:root:coverCache:)` — fires only when the live catalog
+  is **empty** (fresh install / wiped App Support / new Mac); never clobbers
+  existing data. After the copy: rebases `bookFile.path` + `renameLog` paths
+  when the stamped root ≠ the current root, sets `library.path` to the new
+  root, clears the stale bookmark, and nulls `coverCachePath`s whose cached
+  file is absent so the next scan re-extracts covers.
+- App wiring (`AppModel`): `scheduleBackup()` (3 s debounce, background
+  write) after every mutation and after scans **with changes** — a no-change
+  rescan writes nothing, so the FSEvents watcher can't loop on the backup
+  file; a synchronous flush runs on `willTerminateNotification`. Restore is
+  attempted in `chooseLibraryFolder` before `FolderAccess.persist`.
+
 ## Scanning (`LibraryScanner.scan`)
 
 1. Enumerate the root (skip hidden/ignored/unknown), producing

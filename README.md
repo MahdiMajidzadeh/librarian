@@ -42,7 +42,7 @@ Requires macOS 14+. The app is unsigned — right-click → Open the first time.
 
 ```bash
 swift build                       # debug build
-swift test                        # 126 tests, fully offline
+swift test                        # 133 tests, fully offline
 swift run librarian-seed ~/tmp/demo-library   # sample library to play with
 ```
 
