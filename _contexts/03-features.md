@@ -61,7 +61,12 @@
   (Unicode preserved, truncation on character boundaries).
 - **Mandatory preview sheet**: current → new per file, include checkboxes,
   collision rows flagged (auto " (2)" suffix), no-op rows dimmed, excluded
-  rows listed with reasons (missing token / missing file).- Execution: same-directory `moveItem`, DB path updated per file, journal row
+  rows listed with reasons (missing token / missing file).
+- Scopes: **Rename Selection…** (Actions menu / multi-select panel / context
+  menu) and **Rename All Books…** (File menu ⇧⌘R, also in Actions) — the
+  whole library through the same preview sheet, which is the confirmation
+  step; nothing is renamed until the user confirms there.
+- Execution: same-directory `moveItem`, DB path updated per file, journal row
   per file. **Undo Last Rename Batch** (⌥⌘Z, also in Actions menu) restores
   the most recent batch; the journal survives restarts.
 

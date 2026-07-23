@@ -19,6 +19,10 @@ struct LibrarianApp: App {
                     .keyboardShortcut("R", modifiers: .command)
                     .disabled(model.libraryPath == nil || model.isScanning)
                 Divider()
+                Button("Rename All Books…") { model.prepareRenameAll() }
+                    .keyboardShortcut("R", modifiers: [.command, .shift])
+                    .disabled(model.entries.isEmpty)
+                Divider()
                 Button("Export Library as JSON…") { model.exportJSON(selectionOnly: false) }
                 Button("Export Library as CSV…") { model.exportCSV(selectionOnly: false) }
             }

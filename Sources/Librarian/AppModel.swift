@@ -505,14 +505,23 @@ final class AppModel: ObservableObject {
     // MARK: - Rename (FR-4.x)
 
     func prepareRename() {
-        let selected = selectedEntries
-        guard !selected.isEmpty else { return }
+        prepareRename(for: selectedEntries)
+    }
+
+    /// Plans a rename of the entire library; the mandatory preview sheet
+    /// (FR-4.6) is the confirmation step before anything is renamed.
+    func prepareRenameAll() {
+        prepareRename(for: entries)
+    }
+
+    private func prepareRename(for source: [LibraryEntry]) {
+        guard !source.isEmpty else { return }
         do {
             let template = try database.setting(SettingKey.renameTemplate)
                 ?? RenameTemplate.defaultTemplate
             renamePlanRows = try RenamePlanner.plan(
                 template: template,
-                selection: selected.map { ($0.book, $0.files) })
+                selection: source.map { ($0.book, $0.files) })
         } catch {
             errorMessage = error.localizedDescription
         }

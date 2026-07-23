@@ -241,6 +241,8 @@ struct ContentView: View {
                 Divider()
                 Button("Rename Selection…") { model.prepareRename() }
                     .disabled(model.selection.isEmpty)
+                Button("Rename All Books…") { model.prepareRenameAll() }
+                    .disabled(model.entries.isEmpty)
                 Button("Undo Last Rename Batch") { model.undoLastRename() }
                     .disabled(!model.canUndoRename)
                 Divider()
