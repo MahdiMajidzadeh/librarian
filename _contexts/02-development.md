@@ -25,6 +25,15 @@ open Librarian.app
 .build/debug/Librarian & sleep 3; kill -0 $!   # smoke-check UI launch
 ```
 
+## Release CI
+
+`.github/workflows/release-dmg.yml` runs on every `v*` tag (macos-26 runner):
+`swift test` → `Scripts/make-app.sh dist` → stamps `CFBundleShortVersionString`
+/`CFBundleVersion` from the tag (PlistBuddy) → ad-hoc `codesign` → `hdiutil`
+UDZO DMG with an `/Applications` symlink → publishes it as a GitHub release
+asset via `gh release create`. The app stays unsandboxed/ad-hoc-signed; there
+is no notarization step.
+
 ## Targets & layout
 
 | Target | Path | Role |
